@@ -1,0 +1,280 @@
+---
+title: "Example on how to load all datasets"
+date: "`r strftime(Sys.Date(), '%B %d %Y')`"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning=FALSE
+  
+)
+library("dplyr")
+library("plyr")
+library("tidyverse")
+library("ggplot2")
+library("ggpubr")
+```
+
+Load the settings and the script with the loading functions:
+
+```{r load_settings}
+# Load project settings
+source(here::here("settings.R"))
+# Load helper functions
+source(file.path(functions.dir, "output.R"))
+```
+
+Load all datasets into different data.frames with the following code:
+
+```{r load_data}
+#df.qpcr <- read_output_csv("qpcr", .output.dir = data.dir)
+#df.casy <- read_output_csv("casy", .output.dir = data.dir)
+df.turbidostat <- read_output_csv("turbidostat", .output.dir = data.dir)
+df.design <- read_output_csv("design", .output.dir = data.dir)
+df.od <- read_output_csv("spectrophotometer", .output.dir = data.dir)
+```
+
+```{r}
+od.design = left_join(df.design, df.od, by = "channel")
+```
+
+## Estimating pigment composition.
+
+```{r}
+chl.a.comp = data.frame(channel = od.design$channel,
+                      conc = 10.186*(od.design$od_value_685-od.design$od_value_730)-0.08,
+                      purpose = od.design$purpose)
+chl.a.m = data.frame(mean = tapply(chl.a.comp$conc, chl.a.comp$purpose, mean),
+                     sd = tapply(chl.a.comp$conc, chl.a.comp$purpose, sd))
+
+PBS.comp = data.frame(channel = od.design$channel,
+                      conc = (od.design$od_value_634-od.design$od_value_730)/od.design$od_value_730,
+                      purpose = od.design$purpose)
+PBS.m = data.frame(mean = tapply(PBS.comp$conc, PBS.comp$purpose, mean),
+                     sd = tapply(PBS.comp$conc, PBS.comp$purpose, sd))
+```
+
+```{r}
+pig.plot = rbind(chl.a.m, PBS.m)
+rownames(pig.plot) = NULL
+pig.plot$pig = c(rep("chl.A", 2), rep("PBS",2))
+pig.plot$purpose = c("Control", "Treatment", "Control", "Treatment")
+```
+
+```{r}
+ggplot(data=pig.plot, aes(x=as.factor(pig), y=mean, fill=purpose)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  scale_fill_manual("legend", values = c("Control" = "#00BBDB", "Treatment" = "#F066EA")) +
+  labs(y = "Chl.A + PBS (mg pigment/L)", x = "[Phosphate] (mM)") +
+  guides(fill=guide_legend(title="Purpose")) +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                 position=position_dodge(.9)) +
+  theme_classic()
+```
+
+## Turbidostat Data.
+
+```{r}
+df.turb_f = left_join(df.turbidostat, df.design, by = "channel")
+```
+
+```{r}
+ggplot(df.turb_f, aes(x = time_h, y = OD, color = purpose)) +
+  geom_point() +
+  facet_wrap(~ channel + purpose) +
+  theme_bw() +
+  labs(y = expression("OD"[720]),
+       x = "time (h)") +
+  scale_color_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
+  theme(legend.position = "none") 
+```
+
+## Turbidostat results if we zoom in.
+
+```{r}
+df.turb.zoom = df.turb_f %>% filter(df.turb_f$time_h > 150,
+                                    df.turb_f$time_h < 180)
+ggplot(df.turb.zoom, aes(x = time_h, y = OD, color = pump)) +
+  geom_point() +
+  facet_wrap(~ channel + purpose) +
+  theme_bw() +
+  labs(y = expression("OD"[720]),
+       x = "time (h)") +
+  scale_color_manual("legend", values = c("FALSE" = "#FF689F", "TRUE" = "#00BBDB")) +
+  guides(color=guide_legend(title="Pump")) +
+  theme(legend.position="bottom")
+```
+
+## Determining the growth rates of each cycle.
+
+```{r}
+models <- dlply(df.turbidostat, c("channel"), function(df){
+  dlply(df, "decision", function(df2){
+    model = lm(log(OD) ~ time_h, data = df2)
+    coefs = model$coef[2]
+    R2 = summary(model)$r.squared
+    time = mean(df2$time_h)
+    c(coefs, R2, time)
+  })
+  })
+```
+
+```{r}
+df.turb.zoom2 = df.turb_f %>% filter(df.turb_f$channel %in% c(4,8),
+                                    df.turb_f$time_h > 151,
+                                    df.turb_f$time_h < 180)
+
+ggplot(df.turb.zoom2, aes(x = time_h, y = log(OD), color = pump)) +
+  geom_point() +
+  geom_smooth(method = "lm", inherit.aes = F, aes(x = time_h, y = log(OD), fill = as.factor(decision)),
+              show.legend = F, formula = "y~x") +
+  facet_wrap(~ channel + purpose) +
+  theme_bw() +
+  labs(y = expression(paste("log(OD"[720],")")),
+       x = "time (h)") +
+  scale_color_manual("legend", values = c("FALSE" = "#FF689F", "TRUE" = "#00BBDB")) +
+  guides(color=guide_legend(title="Pump")) +
+  theme(legend.position="bottom")
+```
+
+
+```{r}
+lengths = as.vector(do.call(rbind, lapply(models, function(x) length(x))))
+channel = unlist(mapply(rep, c(1,3,4,5,7,8), lengths))
+
+df.turb.lm = as.data.frame(cbind(do.call(rbind, lapply(models, function(x){
+  cbind(do.call(rbind, x), names(x))}
+  )), channel))
+rownames(df.turb.lm) = NULL
+colnames(df.turb.lm) = c("growth.r", "R2", "time", "decision", "channel")
+```
+
+```{r}
+df.turb.lm = df.turb.lm %>%
+  mutate(purpose = case_when(
+    as.character(channel) %in% c(1,3,4) ~ "treatment",
+    as.character(channel) %in% c(5,7,8) ~ "control"
+    ))
+df.turb.lm$growth.r = as.numeric(df.turb.lm$growth.r)
+df.turb.lm$R2 = as.numeric(df.turb.lm$R2)
+df.turb.lm$time = as.numeric(df.turb.lm$time)
+```
+
+```{r}
+ggplot(df.turb.lm, aes(x = time, y = growth.r, color = R2)) +
+  geom_point() +
+  facet_wrap(~ channel + purpose) +
+  labs(y = expression(paste("growth rate (h"^-1, ")")),
+       x = "time (h)") +
+  guides(color=guide_colorbar(title=expression("R"^2))) +
+  theme(legend.position = "right") +
+  scale_color_gradient(low="yellow", high="blue") +
+  theme_bw()
+```
+
+```{r}
+ggplot(df.turb.lm %>% filter(df.turb.lm$R2>=0.9,
+                             df.turb.lm$growth.r<0.2), 
+       aes(x = time, y = growth.r, color = R2)) +
+  geom_point() +
+  facet_wrap(~ channel + purpose) +
+  labs(y = expression(paste("growth rate (h"^-1, ")")),
+       x = "time (h)") +
+  guides(color=guide_colorbar(title=expression("R"^2))) +
+  theme(legend.position = "right") +
+  scale_color_gradient(low="yellow", high="blue") + 
+  theme_bw()
+```
+
+## Summarizing Growth Rates: last 5 days of cultivation.
+
+```{r}
+df.turb.lm.5 = df.turb.lm %>% filter(df.turb.lm$R2>=0.9,
+                             df.turb.lm$growth.r<0.2,
+                             df.turb.lm$time >280)
+ggplot(df.turb.lm.5,aes(x = time, y = growth.r, color = R2)) +
+  geom_point() +
+  facet_wrap(~ channel + purpose) +
+  labs(y = expression(paste("growth rate (h"^-1, ")")),
+       x = "time (h)") +
+  guides(color=guide_colorbar(title=expression("R"^2))) +
+  theme(legend.position = "right") +
+  scale_color_gradient(low="yellow", high="blue") + 
+  theme_bw()
+```
+
+```{r}
+df.turb.msd.5 = data.frame(df.turb.lm.5 %>% 
+                             group_by(channel) %>% 
+                             summarise_at(vars(growth.r),
+                                          list(mean)),
+                           df.turb.lm.5 %>% 
+                             group_by(channel) %>% 
+                             summarise_at(vars(growth.r),
+                                          list(sd)))
+df.turb.msd.5 = df.turb.msd.5[,-3]
+df.turb.msd.5$channel = as.numeric(df.turb.msd.5$channel)
+colnames(df.turb.msd.5) = c("channel", "mean", "sd")
+df.turb.msd.5 = left_join(df.design, df.turb.msd.5, by = "channel")
+```
+
+```{r}
+ggplot(data=df.turb.msd.5, aes(x=as.factor(channel), y=mean, fill=purpose)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
+  labs(y = expression(paste(mu, "(h"^-1,")")), x = "Channel",
+       title = "Summary of technical variation",
+       subtitle = "Bars show mean value per channel and errors indicate 2D") +
+  guides(fill=guide_legend(title="Purpose")) +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                 position=position_dodge(.9)) +
+  theme_classic()
+```
+
+```{r}
+df.turb.msd.Ph = data.frame(df.turb.msd.5 %>% 
+                             group_by(phosphate_mM) %>% 
+                             summarise_at(vars(mean),
+                                          list(mean)),
+                           df.turb.msd.5 %>% 
+                             group_by(phosphate_mM) %>% 
+                             summarise_at(vars(mean),
+                                          list(sd)))
+df.turb.msd.Ph = df.turb.msd.Ph[,-3]
+colnames(df.turb.msd.Ph) = c("Phosphate_mM", "mean", "sd")
+df.turb.msd.Ph$Phosphate_mM = as.character(df.turb.msd.Ph$Phosphate_mM)
+```
+
+```{r}
+ggplot(data=df.turb.msd.Ph, aes(x=as.factor(Phosphate_mM), y=mean, fill = Phosphate_mM)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(y = expression(paste(mu, "(h"^-1,")")), x = "[Phosphate] (mM)",
+       title = "Summary of biological variation",
+       subtitle = "Bars show mean value per channel and errors indicate 95% CI") +
+  scale_fill_manual("legend", values = c("0.23" = "#00BBDB", "0.0115" = "#F066EA")) +
+  geom_errorbar(aes(ymin=mean-qnorm(0.95)*sd/sqrt(3), ymax=mean+qnorm(0.95)*sd/sqrt(3)), width=.2,
+                 position=position_dodge(.9)) +
+  theme_classic() +
+  theme(legend.position="null")
+```
+
+```{r}
+ggplot(df.turb.lm.5, aes(x = channel, y = growth.r, fill = purpose)) +
+  geom_violin(trim = F) +
+  scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
+  labs(y = expression(paste("growth rate (h"^-1, ")")),
+       x = "Channel",
+       title = "Violin plot",
+       subtitle = "Growth rates distribution per channel") +
+  geom_point(alpha = 0.3, color = "darkblue") +
+  geom_boxplot(width=0.1, alpha = 0.6, fill = "white") +
+  theme_classic() +
+  theme(legend.position="null",
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line( size=.1, color="gray" ) ) +
+  scale_y_continuous(breaks = round(seq(min(df.turb.lm.5$growth.r), max(df.turb.lm.5$growth.r), by = 0.005),3))
+```
+
