@@ -1,5 +1,5 @@
 ---
-title: "Example on how to load all datasets"
+title: "Microbial Physiology 1. Turbidostat results."
 date: "`r strftime(Sys.Date(), '%B %d %Y')`"
 output: 
   pdf_document: 
