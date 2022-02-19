@@ -251,7 +251,7 @@ df.chr.cell$Phosphate_mM = c(0.23, 0.0115)
 ```
 
 ```{r}
-ggplot(data=df.chr.cell, aes(x=as.factor(purpose), y= mean, fill = as.factor(Phosphate_mM))) +
+ggplot(data=df.chr.cell, aes(x=as.factor(Phosphate_mM), y= mean, fill = as.factor(Phosphate_mM))) +
   geom_bar(stat="identity", position=position_dodge()) +
   labs(y = expression(paste("chr x cell"^-1)), x = "[Phosphate] (mM)",
        title = "Ploidy level across experimental conditions",
