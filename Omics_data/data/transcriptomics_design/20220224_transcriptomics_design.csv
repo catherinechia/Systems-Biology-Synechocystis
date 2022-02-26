@@ -1,0 +1,7 @@
+channel,purpose,sequence_id
+1,treatment,S01
+3,treatment,S02
+4,treatment,S03
+5,control,S04
+7,control,S05
+8,control,S06
