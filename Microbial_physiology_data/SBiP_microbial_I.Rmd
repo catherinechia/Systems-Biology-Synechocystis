@@ -277,4 +277,3 @@ ggplot(df.turb.lm.5, aes(x = channel, y = growth.r, fill = purpose)) +
         panel.grid.major.y = element_line( size=.1, color="gray" ) ) +
   scale_y_continuous(breaks = round(seq(min(df.turb.lm.5$growth.r), max(df.turb.lm.5$growth.r), by = 0.005),3))
 ```
-
