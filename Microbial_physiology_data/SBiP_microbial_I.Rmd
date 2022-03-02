@@ -233,7 +233,7 @@ ggplot(data=df.turb.msd.5, aes(x=as.factor(channel), y=mean, fill=purpose)) +
                  position=position_dodge(.9)) +
   theme_classic()
 ```
-
+ 
 ```{r}
 df.turb.msd.Ph = data.frame(df.turb.msd.5 %>% 
                              group_by(phosphate_mM) %>% 
