@@ -320,6 +320,7 @@ dds.dge <- DESeqDataSetFromMatrix(countData = round(df.dge.DESeq2[,2:7]),
                               design =  ~ purpose)
 ```
 
+# Dataframe and q-value and Wald Test
 ```{r}
 dge.res = DESeq(dds.dge)
 res.dge = results(dge.res)
@@ -334,7 +335,37 @@ df.dge.fit = df.dge.DESeq2 %>%
   mutate(
     color = ifelse((log.pvalue>-log10(0.01)& 
                       abs(fold.change)>log2(2)), "darkred", "lightblue"))
+
+# CC Added 
+# Plot qvalue object 
+plot(qvalue(res.dge$pvalue))
+
 ```
+# Wald Test
+```{r}
+#https://hbctraining.github.io/DGE_workshop_salmon_online/lessons/05b_wald_test_results.html
+
+resultsNames(dge.res) # to see what names to use
+contrast <- list(resultsNames(dge.res)[1], resultsNames(dge.res)[2])
+results(dge.res, contrast = contrast)
+
+
+## Define contrasts for MOV10 overexpression
+contrast_oe <- c("purpose", "treatment", "control")
+
+## Extract results for MOV10 overexpression vs control
+res_tableOE <- results(dge.res, contrast=contrast_oe, alpha = 0.05)
+
+# Get information on each column in results
+mcols(res_tableOE, use.names=T)
+
+?results
+```
+
+
+
+
+
 
 ```{r}
 df.dge.fit %>%
@@ -354,6 +385,8 @@ df.dge.fit %>%
 DGE to ORA
 
 ```{r}
+#https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
 # Multitest correction, rank genes
 df.dge.fit.rankedqvalue <- df.dge.fit[order(df.dge.fit$qvalue),] #Rank per qvalue
 df.dge.fit.rankedqvalue.rminf <- subset(df.dge.fit.rankedqvalue, !is.infinite(log.pvalue))
