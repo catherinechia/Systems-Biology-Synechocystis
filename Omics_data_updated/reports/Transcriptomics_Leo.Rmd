@@ -1,0 +1,322 @@
+---
+title: "Transcriptomics. RNA-seq data analysis"
+author: "Leonardo Claudin"
+date: "25/2/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library("tidyverse")
+library(dplyr)
+library(plyr)
+library("gridExtra")
+library(DESeq2)
+library(rlist)
+library(logr)
+library(broom)
+library(cowplot)
+library(ggrepel)
+# Load project settings
+# you will need to have the "here" package installed in your computer
+# run install.packages("here") if you don't have it
+source(here::here("settings.R"))
+# Load helper functions
+source(file.path(functions.dir, "output.R"))
+# load transcriptomics count data
+df.transcriptomics.design <- read_output_csv("transcriptomics_design", .output.dir = data.dir)
+df.counts.raw <- read_output_csv("raw_counts_transcriptomics", .output.dir = data.dir)
+df.gene.id <- read_output_csv("gene_id_matching", .output.dir = data.dir)
+```
+
+# Working with Raw Data.
+## Study the percentage of Non-Coding sequences.
+
+```{r}
+df.counts.raw.non.cds = df.counts.raw %>% filter(str_detect(gene, "_"))
+df.sum.counts.raw = aggregate(df.counts.raw$counts,
+                           by = list(sequence_id = df.counts.raw$sequence_id),
+                           FUN = sum)
+df.counts.raw.non.cds = left_join(df.counts.raw.non.cds, df.sum.counts.raw, by = "sequence_id")
+df.counts.raw.non.cds$rel_counts = df.counts.raw.non.cds$counts/df.counts.raw.non.cds$x
+```
+
+```{r}
+ggplot(df.counts.raw.non.cds, aes(x = as.factor(gene), y = as.numeric(rel_counts))) +
+  geom_col(width = 0.7) +
+  facet_wrap(~sequence_id) +
+  scale_y_continuous(labels = scales::percent, limits=c(0,1)) +
+  coord_flip() +
+  labs(y = "Percentage of total counts (%)", x = "Type of NON-CDS",
+       title = "Percentage of total counts not assigned to CDS", 
+       subtitle = "These account for rRNA")
+```
+
+## Removing rows with NON-CDS information.
+
+```{r}
+df.counts.cds  = df.counts.raw %>% filter(! str_detect(gene, "_"))
+```
+
+## Removing rows with low count.
+
+```{r}
+df.counts.low = df.counts.cds %>% filter(counts <= 24)
+df.counts.low = as.data.frame(table(df.counts.low$gene))
+df.counts.low = df.counts.low %>% filter(Freq == 6)
+df.counts.fil = df.counts.cds %>% filter(! gene %in% df.counts.low$Var1)
+#df.counts.zero = df.counts.fil %>% filter(counts == 0)
+#df.counts.fil = df.counts.fil %>% filter(! gene %in% df.counts.zero$gene)
+df.sum.counts.fil = aggregate(df.counts.fil$counts,
+                           by = list(sequence_id = df.counts.fil$sequence_id),
+                            FUN = sum)
+df.sum.counts.fil$src = "After filtering"
+df.sum.counts.raw$src = "Before filtering"
+df.sum.counts.plot = rbind(df.sum.counts.fil, df.sum.counts.raw)
+colnames(df.sum.counts.plot) = c("sequence_id", "total_counts", "source")
+```
+
+```{r}
+ggplot(df.sum.counts.plot, aes(x = as.factor(sequence_id), y = total_counts/10^6, fill = source)) +
+  geom_col(width = 0.7, position = position_dodge()) +
+  labs(y = "Total Million counts", x = "sequence_id",
+       title = "Filtering out genes with low count",
+       subtitle = "Genes with counts < 24 on every sample filtered out") +
+  guides(fill = guide_legend(title = "Dataset")) 
+```
+
+## Normalization of raw counts.
+
+```{r}
+A = ggplot(df.counts.fil, 
+           aes(x = as.factor(sequence_id), y = log2(counts), color = sequence_id)) +
+      geom_boxplot() +
+      labs(x = "Sequence ID", y = "Gene expression (log2(counts))",
+           title = "Gene expression per sequence") +
+      theme_bw() +
+      theme(legend.position = "null")
+
+B = ggplot(df.counts.fil, aes(x = log2(counts), colour = sequence_id)) +
+      geom_density() +
+      labs(x = "Gene expression (log2(counts))", 
+           title = "Density curve of Gene expression") +
+      theme_bw() +
+      theme(legend.position = "null")
+grid.arrange(A, B, ncol = 2, nrow = 1)
+```
+
+### Normalization using DESeq2.
+
+```{r}
+counts = dlply(df.counts.fil, "sequence_id", function(df){
+  as.integer(df$counts)
+})
+countData = list.cbind(counts)
+df.design = df.transcriptomics.design[,2:3]
+dds <- DESeqDataSetFromMatrix(countData = countData,
+                              colData = df.design,
+                              design =  ~ purpose)
+dds <- estimateSizeFactors(dds)
+countData.norm.DESeq2 = counts(dds, normalized=TRUE)
+```
+
+```{r}
+df.norm.counts.DESeq2 = as.data.frame(stack(countData.norm.DESeq2)[,-1])
+colnames(df.norm.counts.DESeq2) = c("sequence_id", "counts")
+df.norm.counts.DESeq2$gene = df.counts.fil$gene
+```
+
+```{r}
+A = ggplot(df.norm.counts.DESeq2, 
+           aes(x = as.factor(sequence_id), y = log2(counts), color = sequence_id)) +
+      geom_boxplot() +
+      labs(x = "Sequence ID", y = "Gene expression (log2(counts))",
+           title = "Gene expression per sequence") +
+      theme_bw() +
+      theme(legend.position = "null")
+
+B = ggplot(df.norm.counts.DESeq2, aes(x = log2(counts), colour = sequence_id)) +
+      geom_density() +
+      labs(x = "Gene expression (log2(counts))", 
+           title = "Density curve of Gene expression") +
+      theme_bw() +
+      theme(legend.position = "null")
+grid.arrange(A, B, ncol = 2, nrow = 1)
+```
+
+### Normalization using Size Factors.
+
+```{r}
+df.norm.counts.SF = ddply(df.counts.fil, .(gene), transform, pseudo_reference = exp(mean(log(counts))))
+df.norm.counts.SF$ratio = df.norm.counts.SF$counts/df.norm.counts.SF$pseudo_reference
+df.norm.counts.SF = ddply(df.norm.counts.SF, .(sequence_id), transform, size_factor = median(ratio, na.rm = T))
+df.norm.counts.SF$normalized_count = df.norm.counts.SF$counts/df.norm.counts.SF$size_factor
+```
+
+```{r}
+A = ggplot(df.norm.counts.SF, 
+           aes(x = as.factor(sequence_id), y = log2(normalized_count), color = sequence_id)) +
+      geom_boxplot() +
+      labs(x = "Sequence ID", y = "Gene expression (log2(counts))",
+           title = "Gene expression per sequence") +
+      theme_bw() +
+      theme(legend.position = "null")
+
+B = ggplot(df.norm.counts.SF, aes(x = log2(normalized_count), colour = sequence_id)) +
+      geom_density() +
+      labs(x = "Gene expression (log2(counts))", 
+           title = "Density curve of Gene expression") +
+      theme_bw() +
+      theme(legend.position = "null")
+grid.arrange(A, B, ncol = 2, nrow = 1)
+```
+
+### Quality control: PCA on DESeq2.
+
+```{r}
+df.pca.DESeq2 <- df.norm.counts.DESeq2 %>% 
+  mutate(
+    log_counts = log2(counts + 1)
+  ) %>% 
+  left_join(df.transcriptomics.design, by = "sequence_id") %>% 
+  select(-counts) %>% 
+  pivot_wider(values_from = log_counts, 
+              names_from = gene
+  ) %>% 
+  mutate(
+    channel = as.character(channel)
+  )
+```
+
+```{r}
+pca_fit <- df.pca.DESeq2 %>% 
+  select(where(is.numeric)) %>% # retain only numeric columns
+  prcomp(scale = F, center = TRUE) # do PCA on scaled data
+```
+
+```{r}
+pca_fit %>%
+  augment(df.pca.DESeq2) %>% # add original dataset back in
+  ggplot(aes(.fittedPC1, .fittedPC2, color = purpose, label = channel)) + 
+  geom_text() + geom_point(shape = 22, size = 4, alpha = 0.5) +
+  scale_color_manual(
+    values = c(control = "#00BBDB", treatment = "#F066EA")
+  ) + theme_bw() +
+  labs(x = "PC1", y = "PC2") +
+  guides(color=guide_legend(title="Purpose"))
+```
+
+```{r}
+pca_fit %>%
+  augment(df.pca.DESeq2) %>% # add original dataset back in
+  ggplot(aes(.fittedPC2, .fittedPC3, color = purpose, label = channel)) + 
+  geom_text() + geom_point(shape = 22, size = 4, alpha = 0.5) +
+  scale_color_manual(
+    values = c(control = "#00BBDB", treatment = "#F066EA")
+  ) + theme_bw() +
+  labs(x = "PC2", y = "PC37") +
+  guides(color=guide_legend(title="Purpose"))
+```
+
+```{r}
+var.pca = as.data.frame(t(summary(pca_fit)$importance))
+colnames(var.pca) = c("sd", "variance", "cumvar")
+var.pca$npc = as.character(seq(from = 1, to = 6, by = 1))
+```
+
+```{r}
+ggplot(var.pca, aes(x = npc, y = variance, group = 1)) +
+  geom_col(fill = "#00BBDB", alpha = 0.5) +
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent) +
+  labs(x = "PC", y = "Explained variance (%)") +
+  theme_bw()
+```
+
+```{r}
+ggplot(var.pca, aes(x = npc, y = cumvar, group = 1)) +
+  geom_col(fill = "#00BBDB", alpha = 0.5) + 
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent) +
+  labs(x = "PC", y = "Cumulative variance (%)") +
+  theme_bw()
+```
+
+```{r}
+fviz_pca_ind(pca_fit,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+```
+
+```{r}
+# define arrow style for plotting
+arrow_style <- arrow(
+  angle = 10, ends = "first", type = "closed", length = grid::unit(5, "pt")
+)
+
+# plot rotation matrix
+pca_fit %>%
+  tidy(matrix = "rotation") %>%
+  pivot_wider(names_from = "PC", names_prefix = "PC", values_from = "value") %>%
+  filter(!between(dense_rank(PC1), 10, n() - 10)) %>%
+  dplyr::rename(ncbi_id = column) %>%
+  left_join(df.gene.id[,1:2], by = "ncbi_id") %>%
+  ggplot() +
+  geom_segment(aes(PC1, PC2), 
+               xend = 0, yend = 0, arrow = arrow_style, alpha = 0.4) +
+  geom_text_repel(
+    aes(PC1, PC2,label = gene_name), 
+    color = "darkred") + theme_bw()
+```
+
+## Finding DGEs.
+
+```{r}
+df.dge.DESeq2 = df.norm.counts.DESeq2 %>% 
+  mutate(logcounts = counts) %>% 
+  select(-counts) %>%
+  pivot_wider(values_from = logcounts,
+               names_from = sequence_id)
+dds.dge <- DESeqDataSetFromMatrix(countData = round(df.dge.DESeq2[,2:7]),
+                              colData = df.design,
+                              design =  ~ purpose)
+```
+
+```{r}
+dge.res = DESeq(dds.dge)
+res.dge = results(dge.res)
+
+df.dge.fit = df.dge.DESeq2 %>%
+  mutate(log.pvalue = -log10(res.dge$pvalue),
+         fold.change = res.dge$log2FoldChange) %>%
+    dplyr::rename(ncbi_id = gene) %>%
+  left_join(df.gene.id[,1:2], by = "ncbi_id") %>% 
+  mutate(
+    color = ifelse((log.pvalue>-log10(0.01)& 
+                      abs(fold.change)>log2(2)), "darkred", "lightblue"))
+```
+
+```{r}
+df.dge.fit %>%
+  mutate(gene_name = ifelse(color == "darkred", gene_name, NA)) %>%
+  ggplot(aes(x = fold.change, y = log.pvalue, color = color, label = gene_name)) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.01)) +
+  geom_vline(xintercept = log2(2)) +
+  geom_vline(xintercept = -log2(2)) +
+  theme_bw() +
+  geom_text_repel() +
+  labs(x = "Effect size: log2(fold-change)", 
+       y = "-log10(adjusted p-value)",
+       title = "Volcano Plot") +
+  theme(legend.position = "none")
+```
+
+
