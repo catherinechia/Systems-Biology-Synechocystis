@@ -1,6 +1,6 @@
 ---
 title: "Transcriptomics. RNA-seq data analysis, ORA and GSEA"
-author: "Leonardo Claudin and Catherine Cgua"
+author: "Leonardo Claudin and Catherine Chia"
 date: "25/2/2022"
 output: pdf_document
 ---
@@ -310,6 +310,9 @@ pca_fit %>%
 ## Finding DGEs.
 
 ```{r}
+#https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+
 df.dge.DESeq2 = df.norm.counts.DESeq2 %>% 
   mutate(logcounts = counts) %>% 
   select(-counts) %>%
@@ -405,6 +408,9 @@ deg.downregulated.rminf <- subset(df.dge.fit.rankedqvalue.rminf,log.pvalue>-log1
 
 ```{r}
 #KEGG - All
+#https://www.genome.jp/kegg/catalog/org_list.html
+#https://bioconductor.org/packages/release/bioc/manuals/clusterProfiler/man/clusterProfiler.pdf
+#https://www.jianshu.com/p/82787ddada38
 
 enrichKEGG_all <- enrichKEGG(gene = df.dge.fit.rankedqvalue.rminf$gene_name,
                         organism = "syn",
