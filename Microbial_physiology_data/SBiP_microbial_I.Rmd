@@ -57,6 +57,36 @@ PBS.m = data.frame(mean = tapply(PBS.comp$conc, PBS.comp$purpose, mean),
                      sd = tapply(PBS.comp$conc, PBS.comp$purpose, sd))
 ```
 
+## Statistical test for Chl a and PBS
+
+```{r}
+# Split lists according to conditions
+ls_chla_treatment <- ifelse(chl.a.comp$purpose=="treatment",chl.a.comp$conc,999)
+ls_chla_control <- ifelse(chl.a.comp$purpose=="control",chl.a.comp$conc,999)
+ls_pbs_treatment <- ifelse(PBS.comp$purpose=="treatment",PBS.comp$conc,999)
+ls_pbs_control <- ifelse(PBS.comp$purpose=="control",PBS.comp$conc,999)
+
+# Remove the nonconformities
+ls_chla_treatment[ ls_chla_treatment != 999]
+ls_chla_control[ ls_chla_control != 999]
+ls_pbs_treatment[ ls_pbs_treatment != 999]
+ls_pbs_control[ ls_pbs_control != 999]
+
+#Normality test. p<0.05
+shapiro.test(ls_chla_treatment) #p-value = 0.004042, non-normally distributed
+shapiro.test(ls_chla_control) #p-value = 0.004043, non-normally distributed
+shapiro.test(ls_pbs_treatment) #p-value = 0.004043, non-normally distributed
+shapiro.test(ls_pbs_control) #p-value = 0.004043, non-normally distributed
+
+#Wilcoxon
+# the p-value is less than α =.05, there is sufficient evidence to reject the null hypothesis, meaning treatment and control are different
+# one-tailed test, because we wanna test if less phosphate leads to less ploidy
+wilcox.test(ls_chla_treatment, ls_chla_control, alternative = "less") #p-value = 0.2471
+wilcox.test(ls_pbs_treatment, ls_pbs_control, alternative = "less") #p-value = 0.3662
+
+```
+
+
 ```{r}
 pig.plot = rbind(chl.a.m, PBS.m)
 rownames(pig.plot) = NULL
