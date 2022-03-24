@@ -30,8 +30,6 @@ source(file.path(functions.dir, "output.R"))
 Load all datasets into different data.frames with the following code:
 
 ```{r load_data}
-#df.qpcr <- read_output_csv("qpcr", .output.dir = data.dir)
-#df.casy <- read_output_csv("casy", .output.dir = data.dir)
 df.turbidostat <- read_output_csv("turbidostat", .output.dir = data.dir)
 df.design <- read_output_csv("design", .output.dir = data.dir)
 df.od <- read_output_csv("spectrophotometer", .output.dir = data.dir)
@@ -56,36 +54,6 @@ PBS.comp = data.frame(channel = od.design$channel,
 PBS.m = data.frame(mean = tapply(PBS.comp$conc, PBS.comp$purpose, mean),
                      sd = tapply(PBS.comp$conc, PBS.comp$purpose, sd))
 ```
-
-## Statistical test for Chl a and PBS
-
-```{r}
-# Split lists according to conditions
-ls_chla_treatment <- ifelse(chl.a.comp$purpose=="treatment",chl.a.comp$conc,999)
-ls_chla_control <- ifelse(chl.a.comp$purpose=="control",chl.a.comp$conc,999)
-ls_pbs_treatment <- ifelse(PBS.comp$purpose=="treatment",PBS.comp$conc,999)
-ls_pbs_control <- ifelse(PBS.comp$purpose=="control",PBS.comp$conc,999)
-
-# Remove the nonconformities
-ls_chla_treatment[ ls_chla_treatment != 999]
-ls_chla_control[ ls_chla_control != 999]
-ls_pbs_treatment[ ls_pbs_treatment != 999]
-ls_pbs_control[ ls_pbs_control != 999]
-
-#Normality test. p<0.05
-shapiro.test(ls_chla_treatment) #p-value = 0.004042, non-normally distributed
-shapiro.test(ls_chla_control) #p-value = 0.004043, non-normally distributed
-shapiro.test(ls_pbs_treatment) #p-value = 0.004043, non-normally distributed
-shapiro.test(ls_pbs_control) #p-value = 0.004043, non-normally distributed
-
-#Wilcoxon
-# the p-value is less than α =.05, there is sufficient evidence to reject the null hypothesis, meaning treatment and control are different
-# one-tailed test, because we wanna test if less phosphate leads to less ploidy
-wilcox.test(ls_chla_treatment, ls_chla_control, alternative = "less") #p-value = 0.2471
-wilcox.test(ls_pbs_treatment, ls_pbs_control, alternative = "less") #p-value = 0.3662
-
-```
-
 
 ```{r}
 pig.plot = rbind(chl.a.m, PBS.m)
@@ -138,6 +106,33 @@ ggplot(df.turb.zoom, aes(x = time_h, y = OD, color = pump)) +
   theme(legend.position="bottom")
 ```
 
+### Sanity check: Calibration method of OD measurements. 
+
+```{r}
+ggplot(df.turb_f, aes(x = od_raw, y = OD, color = as.factor(purpose))) +
+  geom_point() +
+  facet_wrap(~ channel) + 
+  theme_bw() +
+  labs(y = expression("OD"[720]), x = "OD raw",
+       title = expression("Testing the calibration method for OD"[720])) +
+  scale_color_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
+  theme(legend.position = "none") 
+```
+
+```{r}
+models_cal = dlply(df.turb_f, "channel", function(df){
+  linmodel = lm(OD~od_raw, data = df)
+  R2 = summary(linmodel)$r.squared
+  slope = linmodel$coef[2]
+  c(slope, R2)
+})
+
+lm_cal = as.data.frame(do.call(rbind, models_cal))
+colnames(lm_cal) = c("calibration.f", "R2")
+lm_cal$channel = as.double(rownames(lm_cal))
+lm_cal
+```
+
 ## Determining the growth rates of each cycle.
 
 ```{r}
@@ -153,9 +148,8 @@ models <- dlply(df.turbidostat, c("channel"), function(df){
 ```
 
 ```{r}
-df.turb.zoom2 = df.turb_f %>% filter(df.turb_f$channel %in% c(4,8),
-                                    df.turb_f$time_h > 151,
-                                    df.turb_f$time_h < 180)
+df.turb.zoom2 = df.turb_f %>% filter(df.turb_f$time_h > 151,
+                                     df.turb_f$time_h < 170)
 
 ggplot(df.turb.zoom2, aes(x = time_h, y = log(OD), color = pump)) +
   geom_point() +
@@ -219,6 +213,69 @@ ggplot(df.turb.lm %>% filter(df.turb.lm$R2>=0.9,
   theme_bw()
 ```
 
+### Sanity Check: Correlation between Dilution and Growth Rate.
+
+```{r}
+df.turb_f.dil.pump = df.turb_f %>% filter(pump==T)
+df.turb_f.dil.first = df.turb_f %>% group_by(channel, decision) %>% slice(1)
+df.turb_f.dil = rbind(df.turb_f.dil.first, df.turb_f.dil.pump)
+df.turb_f.dil = df.turb_f.dil %>% filter(time_h > 0.1) %>% arrange(channel, decision)
+```
+
+```{r}
+ggplot(df.turb_f.dil, aes(x = time_h, y = OD, color = pump)) +
+  geom_point() +
+  facet_wrap(~ channel + purpose) +
+  theme_bw() +
+  labs(y = expression("OD"[720]),
+       x = "time (h)") +
+  scale_color_manual("legend", values = c("FALSE" = "#FF689F", "TRUE" = "#00BBDB")) +
+  guides(color=guide_legend(title="Pump")) +
+  theme(legend.position="bottom")
+```
+
+```{r}
+df.turb_f.dil.f = df.turb_f.dil %>% group_by(channel) %>% mutate(dil_pair = ceiling(row_number() / 2)) %>% ungroup()
+df.turb_f.dil.f = df.turb_f.dil.f %>% group_by(channel, dil_pair) %>%
+  mutate(Diff = lag(OD)/OD)
+df.turb_f.dil.f = df.turb_f.dil.f %>% filter(! is.na(Diff))
+
+df.turb.lm.dil = df.turb.lm %>% group_by(channel) %>% slice(2:n())
+df.turb.dil.plot = cbind(df.turb.lm.dil,Dilution = df.turb_f.dil.f$Diff)
+```
+
+```{r}
+df.turb.dil.plot.f = df.turb.dil.plot %>% filter(R2>=0.9,growth.r<0.2, Dilution<1.25)
+ggplot(df.turb.dil.plot.f,
+       aes(x = Dilution, y = growth.r, color = channel)) +
+  geom_point(width = 0.7) +
+  labs(x = "Dilution Factor", y = expression(paste("growth rate [",mu, "(h"^-1,")]")),
+       title = "Sanity Check: Growth rate - Dilution Correlation") +
+  theme_bw()
+```
+
+```{r}
+models.dil <- dlply(df.turb.dil.plot.f, c("channel"), function(df){
+  model = lm(growth.r ~ Dilution, data = df)
+  summary(model)$r.squared
+  })
+rsquared.dil = as.data.frame(as.matrix(flatten(models.dil)))
+colnames(rsquared.dil) = c("R2")
+rsquared.dil$channel = as.double(rownames(rsquared.dil))
+rsquared.dil = left_join(rsquared.dil, od.design, by = "channel")
+```
+
+```{r}
+ggplot(rsquared.dil, aes(x = as.factor(channel), y = as.numeric(R2), fill = purpose)) +
+  geom_bar(width = 0.7, stat='identity', position = position_dodge()) + 
+  scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
+  theme(legend.position = "none") +
+  labs(x = "Channel", y = expression("R"^2), 
+       title = expression(paste("R"^2, "value of linear models from each turbidostat channel"))) +
+  guides(fill=guide_legend(title="Purpose")) +
+    theme_bw()
+```
+
 ## Summarizing Growth Rates: last 5 days of cultivation.
 
 ```{r}
@@ -240,14 +297,9 @@ ggplot(df.turb.lm.5,aes(x = time, y = growth.r, color = R2)) +
 df.turb.msd.5 = data.frame(df.turb.lm.5 %>% 
                              group_by(channel) %>% 
                              summarise_at(vars(growth.r),
-                                          list(mean)),
-                           df.turb.lm.5 %>% 
-                             group_by(channel) %>% 
-                             summarise_at(vars(growth.r),
-                                          list(sd)))
-df.turb.msd.5 = df.turb.msd.5[,-3]
-df.turb.msd.5$channel = as.numeric(df.turb.msd.5$channel)
+                                          list(mean,sd)))
 colnames(df.turb.msd.5) = c("channel", "mean", "sd")
+df.turb.msd.5$channel = as.numeric(df.turb.msd.5$channel)
 df.turb.msd.5 = left_join(df.design, df.turb.msd.5, by = "channel")
 ```
 
@@ -263,17 +315,39 @@ ggplot(data=df.turb.msd.5, aes(x=as.factor(channel), y=mean, fill=purpose)) +
                  position=position_dodge(.9)) +
   theme_classic()
 ```
- 
+
+```{r}
+ggplot(df.turb.lm.5, aes(x = channel, y = growth.r, fill = purpose)) +
+  geom_violin(trim = F) +
+  scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
+  labs(y = expression(paste("growth rate (h"^-1, ")")),
+       x = "Channel",
+       title = "Violin plot",
+       subtitle = "Growth rates distribution per channel for last 5 days") +
+  geom_point(alpha = 0.3, color = "darkblue") +
+  geom_boxplot(width=0.1, alpha = 0.6, fill = "white") +
+  theme_classic() +
+  theme(legend.position="null",
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line( size=.1, color="gray" ) ) +
+  scale_y_continuous(breaks = round(seq(min(df.turb.lm.5$growth.r), max(df.turb.lm.5$growth.r), by = 0.005),3))
+```
+
+```{r}
+tests = dlply(df.turb.lm.5, "channel", function(df){
+  norm.test = shapiro.test(df$growth.r)
+  c(norm.test$statistic,norm.test$p.value)
+})
+shapiro.res = as.data.frame(do.call(rbind, tests))
+colnames(shapiro.res) = c("statistic", "p.value")
+shapiro.res
+```
+
 ```{r}
 df.turb.msd.Ph = data.frame(df.turb.msd.5 %>% 
                              group_by(phosphate_mM) %>% 
                              summarise_at(vars(mean),
-                                          list(mean)),
-                           df.turb.msd.5 %>% 
-                             group_by(phosphate_mM) %>% 
-                             summarise_at(vars(mean),
-                                          list(sd)))
-df.turb.msd.Ph = df.turb.msd.Ph[,-3]
+                                          list(mean, sd)))
 colnames(df.turb.msd.Ph) = c("Phosphate_mM", "mean", "sd")
 df.turb.msd.Ph$Phosphate_mM = as.character(df.turb.msd.Ph$Phosphate_mM)
 ```
@@ -291,19 +365,8 @@ ggplot(data=df.turb.msd.Ph, aes(x=as.factor(Phosphate_mM), y=mean, fill = Phosph
   theme(legend.position="null")
 ```
 
+### Sanity Check: Normality per condition.
+
 ```{r}
-ggplot(df.turb.lm.5, aes(x = channel, y = growth.r, fill = purpose)) +
-  geom_violin(trim = F) +
-  scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
-  labs(y = expression(paste("growth rate (h"^-1, ")")),
-       x = "Channel",
-       title = "Violin plot",
-       subtitle = "Growth rates distribution per channel") +
-  geom_point(alpha = 0.3, color = "darkblue") +
-  geom_boxplot(width=0.1, alpha = 0.6, fill = "white") +
-  theme_classic() +
-  theme(legend.position="null",
-        panel.grid.major.x = element_blank(),
-        panel.grid.major.y = element_line( size=.1, color="gray" ) ) +
-  scale_y_continuous(breaks = round(seq(min(df.turb.lm.5$growth.r), max(df.turb.lm.5$growth.r), by = 0.005),3))
+wilcox.test(df.turb.msd.5$mean ~ df.turb.msd.5$purpose)
 ```
