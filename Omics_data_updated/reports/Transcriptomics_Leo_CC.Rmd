@@ -1,7 +1,7 @@
 ---
-title: "Transcriptomics. RNA-seq data analysis, ORA and GSEA"
+title: "Transcriptomics. RNA-seq data analysis, ORA and GSEA, Proteomics"
 author: "Leonardo Claudin and Catherine Chia"
-date: "25/2/2022"
+date: "31/03/2022"
 output: pdf_document
 ---
 
@@ -13,10 +13,14 @@ knitr::opts_chunk$set(echo = TRUE)
 #BiocManager::install("DESeq2")
 #BiocManager::install("qvalue")
 #BiocManager::install("ggnewscale")
+#BiocManager::install("fviz_pca") #failed. Also failed fviz_pca_ind
+#BiocManager::install("apeglm")
+#BiocManager::install("gage")
+#BiocManager::install("pathview")
 
 library("tidyverse")
-library(dplyr)
 library(plyr)
+library(dplyr)
 library("gridExtra")
 library(DESeq2)
 library(rlist)
@@ -25,45 +29,51 @@ library(broom)
 library(cowplot)
 library(ggrepel)
 
-library("clusterProfiler")
-library("qvalue")
+library(clusterProfiler)
+library(qvalue)
 library("ggnewscale")
+#library("fviz_pca")
+
+library(apeglm)
+library(ashr)
+library(gage)
+library(pathview)
 
 
 
 ## Load project settings
-## you will need to have the "here" package installed in your computer
-## run install.packages("here") if you don't have it
-#source(here::here("settings.R"))
-## Load helper functions
-#source(file.path(functions.dir, "output.R"))
-
 root.dir <- "/Users/catchia/_P4SBIP/p4sbip/Omics_data_updated/"
 data.dir <- file.path(root.dir, "data")
 functions.dir <- file.path(root.dir, "functions")
 
+#Folder dir
 data.transcriptomicsdesign.dir <- file.path(data.dir, "transcriptomics_design")
 data.rawcountstranscriptomics.dir <- file.path(data.dir, "raw_counts_transcriptomics")
 data.geneidmatching.dir <- file.path(data.dir, "gene_id_matching")
+data.proteomics.dir <- file.path(data.dir, "proteomics")
+data.goterms.dir <- file.path(data.dir, "go_terms")
 
-## load transcriptomics count data
-#df.transcriptomics.design <- read_output_csv("transcriptomics_design", .output.dir = data.dir)
-#df.counts.raw <- read_output_csv("raw_counts_transcriptomics", .output.dir = data.dir)
-#df.gene.id <- read_output_csv("gene_id_matching", .output.dir = data.dir)
-
+#File dir
 filedir.transcriptomics.design <- file.path(data.transcriptomicsdesign.dir, "20220224_transcriptomics_design.csv")
 filedir.counts.raw <- file.path(data.rawcountstranscriptomics.dir, "20220224_raw_counts_transcriptomics.csv")
 filedir.gene.id <- file.path(data.geneidmatching.dir, "20220224_gene_id_matching.csv")
+filedir.proteomics <- file.path(data.proteomics.dir, "20220301_proteomics.csv")
+filedir.goterms <- file.path(data.goterms.dir, "20190411_go_terms.csv")
 
+## load transcriptomics count data
 df.transcriptomics.design <- read.csv(filedir.transcriptomics.design)
 df.counts.raw <- read.csv(filedir.counts.raw)
 df.gene.id <- read.csv(filedir.gene.id)
 
+## load proteomics count data
+df.proteomics <- read.csv(filedir.proteomics)
+
+## load GO terms (Cyanobase)
+df.go.terms <- read.csv(filedir.goterms)
 ```
 
 # Working with Raw Data.
 ## Study the percentage of Non-Coding sequences.
-
 ```{r}
 df.counts.raw.non.cds = df.counts.raw %>% filter(str_detect(gene, "_"))
 df.sum.counts.raw = aggregate(df.counts.raw$counts,
@@ -73,6 +83,7 @@ df.counts.raw.non.cds = left_join(df.counts.raw.non.cds, df.sum.counts.raw, by =
 df.counts.raw.non.cds$rel_counts = df.counts.raw.non.cds$counts/df.counts.raw.non.cds$x
 ```
 
+#Percentage of total counts not assigned to CDS
 ```{r}
 ggplot(df.counts.raw.non.cds, aes(x = as.factor(gene), y = as.numeric(rel_counts))) +
   geom_col(width = 0.7) +
@@ -85,13 +96,11 @@ ggplot(df.counts.raw.non.cds, aes(x = as.factor(gene), y = as.numeric(rel_counts
 ```
 
 ## Removing rows with NON-CDS information.
-
 ```{r}
 df.counts.cds  = df.counts.raw %>% filter(! str_detect(gene, "_"))
 ```
 
 ## Removing rows with low count.
-
 ```{r}
 df.counts.low = df.counts.cds %>% filter(counts <= 24)
 df.counts.low = as.data.frame(table(df.counts.low$gene))
@@ -108,6 +117,7 @@ df.sum.counts.plot = rbind(df.sum.counts.fil, df.sum.counts.raw)
 colnames(df.sum.counts.plot) = c("sequence_id", "total_counts", "source")
 ```
 
+#Genes with counts < 24 on every sample filtered out
 ```{r}
 ggplot(df.sum.counts.plot, aes(x = as.factor(sequence_id), y = total_counts/10^6, fill = source)) +
   geom_col(width = 0.7, position = position_dodge()) +
@@ -118,7 +128,6 @@ ggplot(df.sum.counts.plot, aes(x = as.factor(sequence_id), y = total_counts/10^6
 ```
 
 ## Normalization of raw counts.
-
 ```{r}
 A = ggplot(df.counts.fil, 
            aes(x = as.factor(sequence_id), y = log2(counts), color = sequence_id)) +
@@ -137,8 +146,8 @@ B = ggplot(df.counts.fil, aes(x = log2(counts), colour = sequence_id)) +
 grid.arrange(A, B, ncol = 2, nrow = 1)
 ```
 
+#DESeq2 Begins
 ### Normalization using DESeq2.
-
 ```{r}
 counts = dlply(df.counts.fil, "sequence_id", function(df){
   as.integer(df$counts)
@@ -152,6 +161,7 @@ dds <- estimateSizeFactors(dds)
 countData.norm.DESeq2 = counts(dds, normalized=TRUE)
 ```
 
+#Plots
 ```{r}
 df.norm.counts.DESeq2 = as.data.frame(stack(countData.norm.DESeq2)[,-1])
 colnames(df.norm.counts.DESeq2) = c("sequence_id", "counts")
@@ -177,7 +187,6 @@ grid.arrange(A, B, ncol = 2, nrow = 1)
 ```
 
 ### Normalization using Size Factors.
-
 ```{r}
 df.norm.counts.SF = ddply(df.counts.fil, .(gene), transform, pseudo_reference = exp(mean(log(counts))))
 df.norm.counts.SF$ratio = df.norm.counts.SF$counts/df.norm.counts.SF$pseudo_reference
@@ -204,7 +213,6 @@ grid.arrange(A, B, ncol = 2, nrow = 1)
 ```
 
 ### Quality control: PCA on DESeq2.
-
 ```{r}
 df.pca.DESeq2 <- df.norm.counts.DESeq2 %>% 
   mutate(
@@ -226,66 +234,70 @@ pca_fit <- df.pca.DESeq2 %>%
   prcomp(scale = F, center = TRUE) # do PCA on scaled data
 ```
 
+## Use PCA to cluster control and treatment groups (quality check)
 ```{r}
-# TODO: Biplot
-# TODO: Add % explained var
+# TODO: Check  %var 
 pca_fit %>%
   augment(df.pca.DESeq2) %>% # add original dataset back in
   ggplot(aes(.fittedPC1, .fittedPC2, color = purpose, label = channel)) + 
-  geom_text() + geom_point(shape = 22, size = 4, alpha = 0.5) +
+  geom_text() + geom_point(shape = 1, size = 6, alpha = 1) +
   scale_color_manual(
     values = c(control = "#00BBDB", treatment = "#F066EA")
   ) + theme_bw() +
-  labs(x = "PC1", y = "PC2") +
+  ggtitle("Investigate for data interaction between the conditions") +
+  labs(x = "PC1 (86.82%)", y = "PC2 (4.05%)") +
   guides(color=guide_legend(title="Purpose"))
+
 ```
 
+#PC2 and PC3
 ```{r}
 pca_fit %>%
   augment(df.pca.DESeq2) %>% # add original dataset back in
   ggplot(aes(.fittedPC2, .fittedPC3, color = purpose, label = channel)) + 
-  geom_text() + geom_point(shape = 22, size = 4, alpha = 0.5) +
+  geom_text() + geom_point(shape = 1, size = 6, alpha = 1) +
   scale_color_manual(
     values = c(control = "#00BBDB", treatment = "#F066EA")
   ) + theme_bw() +
-  labs(x = "PC2", y = "PC37") +
+  labs(x = "PC2", y = "PC3") +
   guides(color=guide_legend(title="Purpose"))
 ```
 
-```{r}
-var.pca = as.data.frame(t(summary(pca_fit)$importance))
-colnames(var.pca) = c("sd", "variance", "cumvar")
-var.pca$npc = as.character(seq(from = 1, to = 6, by = 1))
-```
+# ```{r}
+# var.pca = as.data.frame(t(summary(pca_fit)$importance))
+# colnames(var.pca) = c("sd", "variance", "cumvar")
+# var.pca$npc = as.character(seq(from = 1, to = 6, by = 1))
+# ```
 
-```{r}
-ggplot(var.pca, aes(x = npc, y = variance, group = 1)) +
-  geom_col(fill = "#00BBDB", alpha = 0.5) +
-  geom_point() +
-  geom_line() +
-  scale_y_continuous(limits = c(0,1), labels = scales::percent) +
-  labs(x = "PC", y = "Explained variance (%)") +
-  theme_bw()
-```
+# ```{r}
+# ggplot(var.pca, aes(x = npc, y = variance, group = 1)) +
+#   geom_col(fill = "#00BBDB", alpha = 0.5) +
+#   geom_point() +
+#   geom_line() +
+#   scale_y_continuous(limits = c(0,1), labels = scales::percent) +
+#   labs(x = "PC", y = "Explained variance (%)") +
+#   theme_bw()
+# ```
 
-```{r}
-ggplot(var.pca, aes(x = npc, y = cumvar, group = 1)) +
-  geom_col(fill = "#00BBDB", alpha = 0.5) + 
-  geom_point() +
-  geom_line() +
-  scale_y_continuous(limits = c(0,1), labels = scales::percent) +
-  labs(x = "PC", y = "Cumulative variance (%)") +
-  theme_bw()
-```
+# ```{r}
+# ggplot(var.pca, aes(x = npc, y = cumvar, group = 1)) +
+#   geom_col(fill = "#00BBDB", alpha = 0.5) + 
+#   geom_point() +
+#   geom_line() +
+#   scale_y_continuous(limits = c(0,1), labels = scales::percent) +
+#   labs(x = "PC", y = "Cumulative variance (%)") +
+#   theme_bw()
+# ```
 
-```{r}
-fviz_pca_ind(pca_fit,
-             col.ind = "cos2", # Color by the quality of representation
-             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
-             repel = TRUE     # Avoid text overlapping
-             )
-```
+# ```{r}
+# fviz_pca_ind(pca_fit,
+#              col.ind = "cos2", # Color by the quality of representation
+#              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+#              repel = TRUE     # Avoid text overlapping
+#              )
+# ```
 
+#Biplot for top contributing genes
 ```{r}
 # define arrow style for plotting
 arrow_style <- arrow(
@@ -302,17 +314,17 @@ pca_fit %>%
   ggplot() +
   geom_segment(aes(PC1, PC2), 
                xend = 0, yend = 0, arrow = arrow_style, alpha = 0.4) +
+  xlab("PC1 (86.82%)") +
+  ylab("PC2 (4.05%)")+
+  ggtitle("Top 20 genes contributing to PC1")+
   geom_text_repel(
     aes(PC1, PC2,label = gene_name), 
     color = "darkred") + theme_bw()
 ```
 
-## Finding DGEs.
 
+## Finding DGEs. using DESeq2
 ```{r}
-#https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
-
-
 df.dge.DESeq2 = df.norm.counts.DESeq2 %>% 
   mutate(logcounts = counts) %>% 
   select(-counts) %>%
@@ -323,53 +335,33 @@ dds.dge <- DESeqDataSetFromMatrix(countData = round(df.dge.DESeq2[,2:7]),
                               design =  ~ purpose)
 ```
 
-# Dataframe and q-value and Wald Test
+
+# Quality check data and define p and q-values
 ```{r}
 dge.res = DESeq(dds.dge)
 res.dge = results(dge.res)
 
 df.dge.fit = df.dge.DESeq2 %>%
-  mutate(pvalue=res.dge$pvalue,   #CC Added pvalue column
-         qvalue=qvalue(res.dge$pvalue)$qvalue, #CC Added qvalue column
-         log.pvalue = -log10(res.dge$pvalue),
-         fold.change = res.dge$log2FoldChange) %>%
+  mutate(log.pvalue = -log10(res.dge$pvalue),
+         fold.change = res.dge$log2FoldChange,
+         pvalue=res.dge$pvalue,
+         qvalue=qvalue(res.dge$pvalue)$qvalue) %>%
     dplyr::rename(ncbi_id = gene) %>%
-  left_join(df.gene.id[,1:2], by = "ncbi_id") %>% 
+  left_join(df.gene.id, by = "ncbi_id") %>% 
   mutate(
     color = ifelse((log.pvalue>-log10(0.01)& 
                       abs(fold.change)>log2(2)), "darkred", "lightblue"))
 
-# CC Added 
 # Plot qvalue object 
 plot(qvalue(res.dge$pvalue))
 
-```
-# Wald Test
-```{r}
-#https://hbctraining.github.io/DGE_workshop_salmon_online/lessons/05b_wald_test_results.html
 
-resultsNames(dge.res) # to see what names to use
-contrast <- list(resultsNames(dge.res)[1], resultsNames(dge.res)[2])
-results(dge.res, contrast = contrast)
-
-
-## Define contrasts for MOV10 overexpression
-contrast_oe <- c("purpose", "treatment", "control")
-
-## Extract results for MOV10 overexpression vs control
-res_tableOE <- results(dge.res, contrast=contrast_oe, alpha = 0.05)
-
-# Get information on each column in results
-mcols(res_tableOE, use.names=T)
-
-?results
+#p-value = 0.1
+#q-value = 0.065
+#FP = 100/2000 =
 ```
 
-
-
-
-
-
+## Volcano plot (before using aqeglm)
 ```{r}
 df.dge.fit %>%
   mutate(gene_name = ifelse(color == "darkred", gene_name, NA)) %>%
@@ -382,121 +374,119 @@ df.dge.fit %>%
   geom_text_repel() +
   labs(x = "Effect size: log2(fold-change)", 
        y = "-log10(adjusted p-value)",
-       title = "Volcano Plot") +
+       title = "Volcano Plot before apeglm shrinkage") +
   theme(legend.position = "none")
 ```
-DGE to ORA
 
+
+# Wald Test
+# By default DESeq2 uses the Wald test to identify genes that are differentially expressed between two sample classes.
 ```{r}
-#https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+#https://hbctraining.github.io/DGE_workshop_salmon_online/lessons/05b_wald_test_results.html
+#https://rdrr.io/bioc/DESeq2/f/vignettes/DESeq2.Rmd
 
-# Multitest correction, rank genes
-df.dge.fit.rankedqvalue <- df.dge.fit[order(df.dge.fit$qvalue),] #Rank per qvalue
-df.dge.fit.rankedqvalue.rminf <- subset(df.dge.fit.rankedqvalue, !is.infinite(log.pvalue))
+resultsNames(dge.res) # to see what names to use #from line 340
+contrast <- list(resultsNames(dge.res)[1], resultsNames(dge.res)[2])
+res <-results(dge.res, contrast = contrast)
+#contrast_oe <- c("purpose", "treatment", "control")
 
-# Get DEG up and downregulated
-#deg.upregulated <- subset(df.dge.fit.rankedqvalue, log.pvalue>-log10(0.01) & fold.change>=log2(2) )
-deg.upregulated.rminf <- subset(df.dge.fit.rankedqvalue.rminf,log.pvalue>-log10(0.01)& fold.change>=log2(2))
+# Summarize DESeq2 results before shrinkage
+res_ordered <- res[order(res$pvalue),]
+summary(res)
+sum(res$padj < 0.1, na.rm=TRUE) #[1] 3466
 
-#deg.downregulated <- subset(df.dge.fit.rankedqvalue,log.pvalue>-log10(0.01) & fold.change<=-log2(2) )
-deg.downregulated.rminf <- subset(df.dge.fit.rankedqvalue.rminf,log.pvalue>-log10(0.01) & fold.change<=-log2(2))
+```
+
+##Log fold change shrinkage for visualization and ranking
+```{r}
+#Results tables are generated using the function results, which extracts a results table with log2 fold changes, p values and adjusted p values
+#With no additional arguments to results, the log2 fold change and Wald test p value will be for the last variable in the design formula, and if this is a factor, the comparison will be the last level of this variable over the reference level (see previous note on factor levels).
+
+res_tableOE_normal <- lfcShrink(dge.res, 
+                                coef="purpose_treatment_vs_control", 
+                                type="normal", 
+                                lfcThreshold=1)
+
+res_tableOE_apeglm <- lfcShrink(dge.res, 
+                                coef="purpose_treatment_vs_control", 
+                                type="apeglm",
+                                lfcThreshold=1)
+
+plotMA(res_tableOE_apeglm, ylim=c(-3,3), main = "L2FC Shrinkage using apeglm function", cex = .8)
+abline(h=c(-1,1), col="dodgerblue", lwd=2)
+
+ 
+# The next two rows point out that apeglm and ashr shrinkage methods help to preserve the size of large LFC, and can be used to compute s-values. These properties are related. As noted in the previous section, the original DESeq2 shrinkage estimator used a Normal distribution, with a scale that adapts to the spread of the observed LFCs. Because the tails of the Normal distribution become thin relatively quickly, it was important when we designed the method that the prior scaling is sensitive to the very largest observed LFCs. As you can read in the DESeq2 paper, under the section, "Empirical prior estimate", we used the top 5% of the LFCs by absolute value to set the scale of the Normal prior (we later added weighting the quantile by precision). ashr, published in 2016, and apeglm use wide-tailed priors to avoid shrinking large LFCs. While a typical RNA-seq experiment may have many LFCs between -1 and 1, we might consider a LFC of >4 to be very large, as they represent 16-fold increases or decreases in expression. ashr and apeglm can adapt to the scale of the entirety of LFCs, while not over-shrinking the few largest LFCs. The potential for over-shrinking LFC is also why DESeq2's shrinkage estimator is not recommended for designs with interaction terms.
+
+
+# What are s-values? This quantity proposed by Stephens (2016) gives the estimated rate of false sign among genes with equal or smaller s-value. Stephens (2016) points out they are analogous to the q-value of Storey (2003). The s-value has a desirable property relative to the adjusted p-value or q-value, in that it does not require supposing there to be a set of null genes with LFC = 0 (the most commonly used null hypothesis). Therefore, it can be benchmarked by comparing estimated LFC and s-value to the “true LFC” in a setting where this can be reasonably defined. For these estimated probabilities to be accurate, the scale of the prior needs to match the scale of the distribution of effect sizes, and so the original DESeq2 shrinkage method is not really compatible with computing s-values.
+```
+
+## Get up and downregulated gene lists
+```{r}
+# #https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+#apeglm which filters by s-value, ordered by qvalue, filtered by log10(p)
+df.dge.fit.sval = df.dge.fit %>%
+  mutate(sval= res_tableOE_apeglm$svalue) %>%
+  arrange(qvalue) %>% 
+  filter(!is.infinite(log.pvalue))
+
+#upregulated. 
+df.dge.sval.upreg = df.dge.fit.sval %>%
+  #filter(sval<=0.05& fold.change>=log2(2))
+  filter(log.pvalue>-log10(0.1)& fold.change>=log2(2))
+  #filter(qvalue<0.065 & fold.change>=log2(2))
+
+df.dge.sval.downreg = df.dge.fit.sval %>%
+  #filter(sval<=0.05& fold.change<=-log2(2))
+  filter(log.pvalue>-log10(0.1) & fold.change<=-log2(2))
+  #filter(qvalue<0.065 & fold.change<=-log2(2))
+  
+#Selected top genes for analyses
+df.dge.sval.upreg.top5 = df.dge.sval.upreg %>%
+  slice(1:5)
+
+df.dge.sval.downreg.top7 = df.dge.sval.downreg %>%
+  slice(1:7)
+
+```
+
+
+# Volcano plot
+```{r}
+# using apeglm
+df.dge.fit.sval %>%
+  mutate(gene_name = ifelse(color == "darkred", gene_name, NA)) %>%
+  ggplot(aes(x = fold.change, y = log.pvalue, color = color, label = gene_name)) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.01)) +
+  geom_vline(xintercept = log2(2)) +
+  geom_vline(xintercept = -log2(2)) +
+  theme_bw() +
+  geom_text_repel() +
+  labs(x = "Effect size: log2(fold-change)", 
+       y = "-log10(adjusted p-value)",
+       title = "Volcano Plot after apeglm ") +
+  theme(legend.position = "none")
 
 ```
 
 
 
 
+### GSEA with KEGG
 ```{r}
-#KEGG - All
-#https://www.genome.jp/kegg/catalog/org_list.html
-#https://bioconductor.org/packages/release/bioc/manuals/clusterProfiler/man/clusterProfiler.pdf
-#https://www.jianshu.com/p/82787ddada38
-
-enrichKEGG_all <- enrichKEGG(gene = df.dge.fit.rankedqvalue.rminf$gene_name,
-                        organism = "syn",
-                        keyType = "kegg",
-                        pvalueCutoff = 0.05,
-                        pAdjustMethod ="BH", 
-                        minGSSize = 1, 
-                        maxGSSize = 5000, 
-                        qvalueCutoff = 0.2,
-                        use_internal_data = FALSE
-                        )
-
-
-dotplot(enrichKEGG_all,title="KEGG Enrichment Analysis of all Genes")
-
-
-```
-
-
-```{r}
-#KEGG - Upregulated
-
-enrichKEGG_upregulated <- enrichKEGG(gene = deg.upregulated.rminf$gene_name,
-                        organism = "syn",
-                        keyType = "kegg",
-                        pvalueCutoff = 0.1,
-                        pAdjustMethod ="BH", 
-                        minGSSize = 1, 
-                        maxGSSize = 5000, 
-                        qvalueCutoff = 0.2,
-                        use_internal_data = FALSE
-                        )
-
-
-dotplot(enrichKEGG_upregulated,title="KEGG Enrichment Analysis of all Upregulated Genes")
-
-
-```
-
-KEGG Downregulated
-
-```{r}
-#KEGG
-
-enrichKEGG_downregulated <- enrichKEGG(gene = deg.downregulated.rminf$gene_name,
-                        organism = "syn",
-                        keyType = "kegg",
-                        pvalueCutoff = 0.1,
-                        pAdjustMethod ="none", 
-                        minGSSize = 1, 
-                        maxGSSize = 5000, 
-                        qvalueCutoff = 0.2,
-                        use_internal_data = FALSE
-                        )
-
-dotplot(enrichKEGG_downregulated, title="KEGG Enrichment Analysis of all Downregulated Genes")
-```
-
-GSEA
-
-```{r}
-
-GSEA(
-  df.dge.fit.rankedqvalue.rminf$gene_name,
-  exponent = 1,
-  minGSSize = 1,
-  maxGSSize = 500,
-  eps = 1e-10,
-  pvalueCutoff = 0.05,
-  pAdjustMethod = "BH",
-  TERM2GENE = NA,
-  verbose = TRUE,
-  seed = FALSE,
-  by = "fgsea"
-)
-
 #https://learn.gencore.bio.nyu.edu/rna-seq-analysis/gene-set-enrichment-analysis/
-df.genelist.kegg <- df.dge.fit.rankedqvalue.rminf$fold.change # Create a vector of the gene unuiverse
-names(df.genelist.kegg) <- df.dge.fit.rankedqvalue.rminf$gene_name # Name vector with ENTREZ ids
-df.genelist.kegg<-na.omit(df.genelist.kegg) # omit any NA values 
-df.genelist.kegg = sort(df.genelist.kegg, decreasing = TRUE) # sort the list in decreasing order (required for clusterProfiler)
+df.genelist.gsekegg <- df.dge.fit.sval$fold.change # Create a vector of the gene unuiverse
+names(df.genelist.gsekegg) <- df.dge.fit.sval$gene_name # Name vector with ENTREZ ids
+df.genelist.gsekegg<-na.omit(df.genelist.gsekegg) # omit any NA values 
+df.genelist.gsekegg = sort(df.genelist.gsekegg, decreasing = TRUE) # sort the list in decreasing order (required for clusterProfiler)
 
 
-gseKEGG <- gseKEGG(geneList = df.genelist.kegg,
+gseKEGG <- gseKEGG(geneList = df.genelist.gsekegg,
                organism     = "syn",
-               nPerm        = 10000,
+               #nPerm        = 10000,
                minGSSize    = 3,
                maxGSSize    = 800,
                pvalueCutoff = 0.1,
@@ -506,33 +496,376 @@ gseKEGG <- gseKEGG(geneList = df.genelist.kegg,
 dotplot(gseKEGG, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
 
 
+#The geneRatio in gseKEGG results is calculated by dotplot. The calculation method is :(count of core enrichment genes) / (count of pathway genes) .
+
+
 ```
 
-#Enrichment map organizes enriched terms into a network with edges connecting overlapping gene sets. In this way, mutually overlapping gene sets are tend to cluster together, making it easy to identify functional modules.
 ```{r}
-emapplot(gseKEGG)
-
+gseKEGG_emap = enrichplot::pairwise_termsim(gseKEGG)
+emapplot(gseKEGG_emap)
 ```
 
 #The cnetplot depicts the linkages of genes and biological concepts (e.g. GO terms or KEGG pathways) as a network (helpful to see which genes are involved in enriched pathways and genes that may belong to multiple annotation categories).
+
 ```{r}
-# categorySize can be either 'pvalue' or 'geneNum'
-cnetplot(gseKEGG, categorySize="pvalue", foldChange=df.genelist.kegg, cex_label_category=0.8, cex_label_gene=0.6, title="KEGG Pathways and Enriched Genes")
-?cnetplot
+cnetplot(gseKEGG, categorySize="pvalue", foldChange=df.genelist.gsekegg, cex_label_category=0.8, cex_label_gene=0.6, title="KEGG Pathways and Enriched Genes")
+```
+
+### GSEA Plot 
+
+```{r}
+gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[1], geneSetID = 1) # [1] "Pyruvate metabolism" 
+gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[2], geneSetID = 2) # "Pantothenate and CoA biosynthesis"
+gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[3], geneSetID = 3) # "Oxidative phosphorylation" 
+gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[4], geneSetID = 4) # "Fatty acid degradation" 
+gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[5], geneSetID = 5) # "Two-component system"
+
+#Not shown on gseKEGG
+gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[6], geneSetID = 1) # "Glycolysis / Gluconeogenesis"  
+
+# [1] "Pyruvate metabolism"               "Pantothenate and CoA biosynthesis" "Oxidative phosphorylation"        
+# [4] "Fatty acid degradation"            "Two-component system"              "Glycolysis / Gluconeogenesis"  
 
 ```
 
-#GSEA Plot (Absolutely no idea how to read this yet)
-```{r}
+``` {r}
+# browseKEGG(gseKEGG, "syn00010") #Glycolysis/Gluconeogenesis
+# browseKEGG(gseKEGG, "syn00020") #Citrate cycle
+#browseKEGG(gseKEGG, "syn02020") #Two component system
 
-gseaplot(gseKEGG, by = "all", title = gseKEGG$Description[5], geneSetID = 1)
+
+#TODO: to run this chunk successfuly
+# #ErrorNote: Mapping via KEGG gene ID (not Entrez) is supported for this species,
+# it looks like "sll1852"!
+# Info: Getting gene ID data from KEGG...
+# Error in .getUrl(url, .listParser, nameColumn = 1, valueColumn = 2) : 
+#   Bad Request (HTTP 400).
+
+# pathview(gene.data=df.genelist.gsekegg,
+#          pathway.id="syn02020",
+#          species = "syn",
+#          limit= list(gene=max(abs(df.genelist.gsekegg)),
+#                      cpd=1))
+
+df.gseKEGG.extresults <- data.frame(pathID = gseKEGG@result$ID, 
+                                    pathName = gseKEGG@result$Description,
+                                    enrichScore = gseKEGG@result$enrichmentScore,
+                                    pvalue = gseKEGG@result$pvalue,
+                                    padj = gseKEGG@result$p.adjust,
+                                    qvalue = gseKEGG@result$qvalues,
+                                    rank = gseKEGG@result$rank,
+                                    coreEnrich = gseKEGG@result$core_enrichment)
+
+#Export df.gseKEGG.extresults
+#write.csv(df.gseKEGG.extresults,"df_gseKEGG_extresults.csv")
+#write.csv(df.dge.fit.sval,"df_dge_fit_sval.csv")
 ```
 
 
 
 
 
+### GSEA with Cyanobase (GO terms)
 
+```{r}
+df.cyanobase = ddply(df.go.terms, .(go_term), transform,
+                     GO_term = str_c(substr(strsplit(go_term, "GO:", fixed = T)[[1]][2], 1,
+                                            nchar(strsplit(go_term, "GO:", fixed = T)[[1]][2])-1),
+                                     substr(strsplit(go_term, "GO:", fixed = T)[[1]][1], 1,
+                                            nchar(strsplit(go_term, "GO:", fixed = T)[[1]][1])-2),
+                                     sep = " ")) %>%
+  select(-organism, -go_term)
+```
+
+
+# Create GO
+```{r}
+df.go.dge = df.cyanobase %>%
+  filter(gene_id %in% df.dge.fit$gene_id) %>%
+  dplyr::mutate(
+    ncbi_id = unlist(lapply(gene_id, function(x){
+  df.dge.fit[df.dge.fit$gene_id==x,1][[1]]
+      }), use.names = FALSE)
+  ) %>%
+  select(-gene_id) %>%
+  ddply(., .(ncbi_id), transform,
+        ncbi_id = strsplit(ncbi_id, "BAA")[[1]][2]) %>%
+  group_by(GO_term) %>%
+  dplyr::summarise(ncbi_id = list(ncbi_id))
+
+GO.dge = as.list(df.go.dge$ncbi_id)
+names(GO.dge) = df.go.dge$GO_term
+
+#Upregulated s-vaue
+df.go.dge.sval.upreg.top5 = df.cyanobase %>%
+  filter(gene_id %in% df.dge.sval.upreg.top5$gene_id) %>%
+  dplyr::mutate(
+    ncbi_id = unlist(lapply(gene_id, function(x){
+  df.dge.sval.upreg.top5[df.dge.sval.upreg.top5$gene_id==x,1][[1]]
+      }), use.names = FALSE)
+  ) %>%
+  select(-gene_id) %>%
+  ddply(., .(ncbi_id), transform,
+        ncbi_id = strsplit(ncbi_id, "BAA")[[1]][2]) %>%
+  group_by(GO_term) %>%
+  dplyr::summarise(ncbi_id = list(ncbi_id))
+
+GO.dge = as.list(df.go.dge.sval.upreg.top5$ncbi_id)
+names(GO.dge) = df.go.dge.sval.upreg.top5$GO_term
+
+
+#Downregulated s-vaue #top7 because not all the genes are reflected in GO
+df.go.dge.sval.downreg.top7 = df.cyanobase %>%
+  filter(gene_id %in% df.dge.sval.downreg.top7$gene_id) %>%
+  dplyr::mutate(
+    ncbi_id = unlist(lapply(gene_id, function(x){
+  df.dge.sval.downreg.top7[df.dge.sval.downreg.top7$gene_id==x,1][[1]]
+      }), use.names = FALSE)
+  ) %>%
+  select(-gene_id) %>%
+  ddply(., .(ncbi_id), transform,
+        ncbi_id = strsplit(ncbi_id, "BAA")[[1]][2]) %>%
+  group_by(GO_term) %>%
+  dplyr::summarise(ncbi_id = list(ncbi_id))
+
+GO.dge = as.list(df.go.dge.sval.downreg.top7$ncbi_id)
+names(GO.dge) = df.go.dge.sval.downreg.top7$GO_term
+
+
+
+
+```
+
+
+## TODO: Restart R if it fails
+```{r}
+#TODO
+go.input = as.matrix(df.dge.DESeq2[,-1])
+rownames(go.input) = unlist(lapply(df.dge.DESeq2$gene,
+                      function(x){strsplit(x, "BAA")[[1]][2]}),
+               use.names = F)
+
+goterms.data = gage(go.input, gsets = GO.dge, ref = 4:6, samp = 1:3)
+```
+
+cutoff = numeric, q- or p-value cutoff, between 0 and 1. Default 0.1 (for q-value). When p-value is used, recommended cutoff value is 0.001 for data with more than 2 replicates per condition or 0.01 for les sample sizes.
+
+```{r}
+gsea.go.sig<-sigGeneSet(goterms.data, outname="GSEA.Cyanobase(GO)",cutoff = 0.1,
+                        heatmap = T, pdf.size = c(7,7))
+```
+
+### GO terms. Upregulated.
+
+```{r}
+head(goterms.data$greater[, 1:5], 3)
+head(go.input)
+head(GO.dge)
+gse.goterm.up = esset.grp(goterms.data$greater, go.input, gsets = GO.dge, 
+                          ref = 4:6, samp = 1:3, test4up = T, output = T,
+                          outname = "GOterms_Upregulated", make.plot = F)
+```
+
+```{r}
+gs = unique(unlist(GO.dge[rownames(goterms.data$greater)[1:4]]))
+gs_ncbi_id = paste("BAA", GO.dge[[gs]], sep="")
+gs_gene_id = df.gene.id[df.gene.id$ncbi_id %in% gs_ncbi_id,]$gene_id
+for (gs in rownames(goterms.data$greater)[1:4]) {
+  outname = gsub(" |:|/", "_", substr(gs, 9, 100))
+  outname = paste(outname, "all", sep=".")
+  geneData(genes = GO.dge[[gs]], exprs = go.input, ref = 4:6,
+           samp = 1:3, outname = outname, txt = T, heatmap = T,
+           Colv = F, Rowv = F, dendrogram = "none", limit = 3, scatterplot = T)
+}
+```
+
+### GO terms. Downregulated.
+
+```{r}
+head(goterms.data$less[, 1:5],3)
+gse.goterm.down = esset.grp(goterms.data$less, go.input, gsets = GO.dge, 
+                          ref = 4:6, samp = 1:3, test4up = F, output = T,
+                          outname = "GOterms_Downregulated", make.plot = F)
+```
+
+```{r}
+gs = unique(unlist(GO.dge[rownames(goterms.data$less)[1:4]]))
+for (gs in rownames(goterms.data$less)[1:4]) {
+  outname = gsub(" |:|/", "_", substr(gs, 9, 100))
+  outname = paste(outname, "all", sep=".")
+  geneData(genes = GO.dge[[gs]], exprs = go.input, ref = 4:6,
+           samp = 1:3, outname = outname, txt = T, heatmap = T,
+           Colv = F, Rowv = F, dendrogram = "none", limit = 3, scatterplot = T)
+}
+```
+
+
+
+# Proteomics. Protein Analysis.
+
+```{r}
+df.proteomics %>%
+  dplyr::count(ratio_count) %>%
+  ggplot(aes(x = ratio_count, y = n)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Number of samples", y = "Number of proteins") +
+  theme_bw()
+```
+
+## Integration with transcriptomics.
+
+```{r}
+df.proteomics = ddply(df.proteomics, .(description), transform, 
+      gene_id = strsplit(strsplit(description, "[=]")[[1]][4], " ")[[1]][1])
+```
+
+```{r}
+# df.prot.fit = df.proteomics %>%
+#   filter(gene_id %in%df.dge.fit$gene_id) %>%  #Changed to s-value/apelgm
+#   arrange(gene_id)
+# fold.change.trans = vector(length = nrow(df.prot.fit))
+# for (i in 1:nrow(df.prot.fit)){
+#   fold.change.trans[i] = df.dge.fit[df.dge.fit$gene_id==df.prot.fit[i,9],9][[1]]
+# }
+# 
+# df.prot.fit$transcrip.fc = fold.change.trans
+
+
+df.prot.fit = df.proteomics %>%
+  filter(gene_id %in%df.dge.fit.sval$gene_id) %>%  #Changed to s-value/apelgm
+  arrange(gene_id)
+fold.change.trans = vector(length = nrow(df.prot.fit))
+for (i in 1:nrow(df.prot.fit)){
+  fold.change.trans[i] = df.dge.fit.sval[df.dge.fit.sval$gene_id==df.prot.fit[i,9],9][[1]]
+}
+
+df.prot.fit$transcrip.fc = fold.change.trans
+
+
+# Match with Upregulated genes
+df.prot.fit.upreggenes = df.proteomics %>%
+  filter(!is.na(avg_ratio)) %>%
+  filter(gene_id %in%df.dge.sval.upreg$gene_id) %>%  #Changed to s-value/apelgm
+  arrange(gene_id)
+fold.change.trans = vector(length = nrow(df.prot.fit.upreggenes))
+for (i in 1:nrow(df.prot.fit.upreggenes)){
+  fold.change.trans[i] = df.dge.sval.upreg[df.dge.sval.upreg$gene_id==df.prot.fit.upreggenes[i,9],9][[1]]
+}
+
+df.prot.fit.upreggenes$transcrip.fc = fold.change.trans
+
+
+# Match with Downregulated genes
+df.prot.fit.downreggenes = df.proteomics %>%
+  filter(!is.na(avg_ratio)) %>%
+  filter(gene_id %in%df.dge.sval.downreg$gene_id) %>%  #Changed to s-value/apelgm
+  arrange(gene_id)
+fold.change.trans = vector(length = nrow(df.prot.fit.downreggenes))
+for (i in 1:nrow(df.prot.fit.downreggenes)){
+  fold.change.trans[i] = df.dge.sval.downreg[df.dge.sval.downreg$gene_id==df.prot.fit.downreggenes[i,9],9][[1]]
+}
+
+df.prot.fit.downreggenes$transcrip.fc = fold.change.trans
+
+
+#Combine both for plotting
+df.prot.fit.updownreggenes <- rbind (df.prot.fit.upreggenes,df.prot.fit.downreggenes )
+
+#Export df.prot.fit
+#write.csv(df.prot.fit,"df_prot_fit.csv")
+
+```
+
+```{r}
+df.prot.fit %>%
+  ggplot(aes(x = avg_ratio, y = transcrip.fc, label = paste(gene_id, protein, sep = "-"))) +
+  geom_point() +
+  theme_bw() +
+  geom_text_repel() +
+  geom_hline(yintercept = 0) +
+  geom_hline(yintercept = 1, size=0.4, color="green") +
+  geom_hline(yintercept = -1, size=0.4, color="red") +
+  geom_vline(xintercept = 0) +
+  geom_vline(xintercept = 1, size=0.4, color="green") +
+  geom_vline(xintercept = -1, size=0.4, color="red") +
+  labs(x = "Protein effect size: log2(fold-change)", 
+       y = "Transcript effect size: log2(fold-change)",
+       title = "Log2 ratios correlation between Transcriptomics and Proteomics")
+
+
+#PLot expressed proteins to significatnt genes
+df.prot.fit.updownreggenes %>%
+  ggplot(aes(x = avg_ratio, y = transcrip.fc, label = paste(gene_id, protein, sep = "-"))) +
+  geom_point() +
+  theme_bw() +
+  geom_text_repel() +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  labs(x = "Protein effect size: log2(fold-change)", 
+       y = "Transcript effect size: log2(fold-change)",
+       title = "Log2 ratios correlation between Transcriptomics and Proteomics")
+
+
+
+
+```
+
+## GSEA for proteomics. 
+## TODO: Failed to reproduce
+```{r}
+df.prot.fit.gsea = df.prot.fit %>%
+  dplyr::rename(gene_name = gene_id) %>%
+  ddply(., .(gene_name), transform, 
+        gene_id = df.gene.id[df.gene.id$gene_id==gene_name,3][[1]][1]) %>%
+  select(avg_ratio, gene_id) %>%
+  arrange(desc(avg_ratio)) %>%
+  filter(!is.na(avg_ratio))
+
+df.genelist.prot.names = df.prot.fit.gsea$gene_id
+df.genelist.prot.KEGG = df.prot.fit.gsea$avg_ratio
+names(df.genelist.prot.KEGG) = df.genelist.prot.names
+         
+gseKEGG <- gseKEGG(geneList = df.genelist.prot.KEGG,
+               organism     = "syn",
+               nPerm        = 1000,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.1,
+               pAdjustMethod = "BH",
+               keyType       = "kegg")
+dotplot(gseKEGG, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
+
+
+
+```
+
+### G(P)SEA Upregulated.
+
+```{r}
+df.genelist.KEGG.up = df.genelist.KEGG[df.genelist.KEGG>1]
+gseKEGG <- gseKEGG(geneList = df.genelist.KEGG.up,
+               organism     = "syn",
+               nPerm        = 10000,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.1,
+               pAdjustMethod = "none",
+               keyType       = "kegg")
+dotplot(gseKEGG, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
+```
+
+### G(P)SEA Downregulated.
+
+```{r}
+df.genelist.KEGG.down = sort(df.genelist.KEGG[df.genelist.KEGG<(-1)], decreasing = T)
+gseKEGG <- gseKEGG(geneList = df.genelist.KEGG.down,
+               organism     = "syn",
+               pvalueCutoff = 0.1,
+               pAdjustMethod = "none",
+               keyType       = "kegg")
+dotplot(gseKEGG, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
+```
 
 
 
