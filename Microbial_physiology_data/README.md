@@ -12,4 +12,4 @@ All the datasets are stored In the `./data/` folder, you will find 5 datasets:
 - `casy`: cell count data from CASY-counter
 - `qPCR`: Ct values from quantitative PCR
 
-You will find an example on how to load the data in the Rmarkdown file in `./reports/loading_data_example.Rmd`
+The data analyses are captured in the Rmarkdown file in `./reports/`

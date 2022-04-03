@@ -8,7 +8,7 @@ All the datasets are stored in the `./data/` folder, you will find 5 datasets:
 - `raw_counts_transcriptomics`: raw counts from RNAseq
 - `transcriptomics_design`: match sequencing samples to biological samples
 - `gene_id_matching`: match different IDs for genes in *Synechocystis* genome
-- `functional_categories`: functional categories for genes in *Synechocystis*' genome taken from CyanoBase
+- `functional_categories`: functional categories for genes in *Synechocystis*' genome taken from CyanoBase (2019-04-11)
 - `proteomics`: log ratios from proteomics
 
-You will find an example on how to load the data in the Rmarkdown file in `./reports/loading_data_example.Rmd`
+The data analyses are captured in the Rmarkdown file in `./reports/`
