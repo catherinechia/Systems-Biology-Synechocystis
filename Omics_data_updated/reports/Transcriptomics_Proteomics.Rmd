@@ -1,5 +1,5 @@
 ---
-title: "Transcriptomics. RNA-seq data analysis, ORA and GSEA, Proteomics"
+title: "Transcriptomics and Proteomics"
 author: "Leonardo Claudin and Catherine Chia"
 date: "31/03/2022"
 output: pdf_document
@@ -10,17 +10,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-#BiocManager::install("DESeq2")
-#BiocManager::install("qvalue")
-#BiocManager::install("ggnewscale")
-#BiocManager::install("fviz_pca") #failed. Also failed fviz_pca_ind
-#BiocManager::install("apeglm")
-#BiocManager::install("gage")
-#BiocManager::install("pathview")
-
 library("tidyverse")
-library(plyr)
 library(dplyr)
+library(plyr)
 library("gridExtra")
 library(DESeq2)
 library(rlist)
@@ -40,11 +32,10 @@ library(gage)
 library(pathview)
 
 
-
-## Load project settings
-root.dir <- "/Users/catchia/_P4SBIP/p4sbip/Omics_data_updated/"
-data.dir <- file.path(root.dir, "data")
-functions.dir <- file.path(root.dir, "functions")
+# Load project settings
+source(here::here("settings.R"))
+# Load helper functions
+source(file.path(functions.dir, "output.R"))
 
 #Folder dir
 data.transcriptomicsdesign.dir <- file.path(data.dir, "transcriptomics_design")
@@ -263,39 +254,6 @@ pca_fit %>%
   guides(color=guide_legend(title="Purpose"))
 ```
 
-# ```{r}
-# var.pca = as.data.frame(t(summary(pca_fit)$importance))
-# colnames(var.pca) = c("sd", "variance", "cumvar")
-# var.pca$npc = as.character(seq(from = 1, to = 6, by = 1))
-# ```
-
-# ```{r}
-# ggplot(var.pca, aes(x = npc, y = variance, group = 1)) +
-#   geom_col(fill = "#00BBDB", alpha = 0.5) +
-#   geom_point() +
-#   geom_line() +
-#   scale_y_continuous(limits = c(0,1), labels = scales::percent) +
-#   labs(x = "PC", y = "Explained variance (%)") +
-#   theme_bw()
-# ```
-
-# ```{r}
-# ggplot(var.pca, aes(x = npc, y = cumvar, group = 1)) +
-#   geom_col(fill = "#00BBDB", alpha = 0.5) + 
-#   geom_point() +
-#   geom_line() +
-#   scale_y_continuous(limits = c(0,1), labels = scales::percent) +
-#   labs(x = "PC", y = "Cumulative variance (%)") +
-#   theme_bw()
-# ```
-
-# ```{r}
-# fviz_pca_ind(pca_fit,
-#              col.ind = "cos2", # Color by the quality of representation
-#              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
-#              repel = TRUE     # Avoid text overlapping
-#              )
-# ```
 
 #Biplot for top contributing genes
 ```{r}
@@ -355,10 +313,6 @@ df.dge.fit = df.dge.DESeq2 %>%
 # Plot qvalue object 
 plot(qvalue(res.dge$pvalue))
 
-
-#p-value = 0.1
-#q-value = 0.065
-#FP = 100/2000 =
 ```
 
 ## Volcano plot (before using aqeglm)
@@ -391,7 +345,8 @@ res <-results(dge.res, contrast = contrast)
 #contrast_oe <- c("purpose", "treatment", "control")
 
 # Summarize DESeq2 results before shrinkage
-res_ordered <- res[order(res$pvalue),]
+#res_ordered <- res[order(res$pvalue),]
+res_ordered <- res[order(res$padj),]
 summary(res)
 sum(res$padj < 0.1, na.rm=TRUE) #[1] 3466
 
@@ -581,8 +536,10 @@ df.cyanobase = ddply(df.go.terms, .(go_term), transform,
 
 # Create GO
 ```{r}
+
 df.go.dge = df.cyanobase %>%
-  filter(gene_id %in% df.dge.fit$gene_id) %>%
+  #filter(gene_id %in% df.dge.fit$gene_id) %>%
+  filter(gene_id %in% df.dge.fit.sval$gene_id) %>% #changed to df.dge.fit.sval
   dplyr::mutate(
     ncbi_id = unlist(lapply(gene_id, function(x){
   df.dge.fit[df.dge.fit$gene_id==x,1][[1]]
@@ -611,9 +568,6 @@ df.go.dge.sval.upreg.top5 = df.cyanobase %>%
   group_by(GO_term) %>%
   dplyr::summarise(ncbi_id = list(ncbi_id))
 
-GO.dge = as.list(df.go.dge.sval.upreg.top5$ncbi_id)
-names(GO.dge) = df.go.dge.sval.upreg.top5$GO_term
-
 
 #Downregulated s-vaue #top7 because not all the genes are reflected in GO
 df.go.dge.sval.downreg.top7 = df.cyanobase %>%
@@ -629,24 +583,19 @@ df.go.dge.sval.downreg.top7 = df.cyanobase %>%
   group_by(GO_term) %>%
   dplyr::summarise(ncbi_id = list(ncbi_id))
 
-GO.dge = as.list(df.go.dge.sval.downreg.top7$ncbi_id)
-names(GO.dge) = df.go.dge.sval.downreg.top7$GO_term
-
-
-
-
 ```
 
 
 ## TODO: Restart R if it fails
 ```{r}
-#TODO
-go.input = as.matrix(df.dge.DESeq2[,-1])
+#TODO df.dge.fit.sval
+go.input = as.matrix(df.dge.DESeq2[,-1]) #all original unfiltered genes
 rownames(go.input) = unlist(lapply(df.dge.DESeq2$gene,
                       function(x){strsplit(x, "BAA")[[1]][2]}),
                use.names = F)
 
 goterms.data = gage(go.input, gsets = GO.dge, ref = 4:6, samp = 1:3)
+
 ```
 
 cutoff = numeric, q- or p-value cutoff, between 0 and 1. Default 0.1 (for q-value). When p-value is used, recommended cutoff value is 0.001 for data with more than 2 replicates per condition or 0.01 for les sample sizes.
@@ -669,8 +618,7 @@ gse.goterm.up = esset.grp(goterms.data$greater, go.input, gsets = GO.dge,
 
 ```{r}
 gs = unique(unlist(GO.dge[rownames(goterms.data$greater)[1:4]]))
-gs_ncbi_id = paste("BAA", GO.dge[[gs]], sep="")
-gs_gene_id = df.gene.id[df.gene.id$ncbi_id %in% gs_ncbi_id,]$gene_id
+
 for (gs in rownames(goterms.data$greater)[1:4]) {
   outname = gsub(" |:|/", "_", substr(gs, 9, 100))
   outname = paste(outname, "all", sep=".")
@@ -718,19 +666,6 @@ df.proteomics %>%
 ```{r}
 df.proteomics = ddply(df.proteomics, .(description), transform, 
       gene_id = strsplit(strsplit(description, "[=]")[[1]][4], " ")[[1]][1])
-```
-
-```{r}
-# df.prot.fit = df.proteomics %>%
-#   filter(gene_id %in%df.dge.fit$gene_id) %>%  #Changed to s-value/apelgm
-#   arrange(gene_id)
-# fold.change.trans = vector(length = nrow(df.prot.fit))
-# for (i in 1:nrow(df.prot.fit)){
-#   fold.change.trans[i] = df.dge.fit[df.dge.fit$gene_id==df.prot.fit[i,9],9][[1]]
-# }
-# 
-# df.prot.fit$transcrip.fc = fold.change.trans
-
 
 df.prot.fit = df.proteomics %>%
   filter(gene_id %in%df.dge.fit.sval$gene_id) %>%  #Changed to s-value/apelgm
@@ -740,8 +675,12 @@ for (i in 1:nrow(df.prot.fit)){
   fold.change.trans[i] = df.dge.fit.sval[df.dge.fit.sval$gene_id==df.prot.fit[i,9],9][[1]]
 }
 
-df.prot.fit$transcrip.fc = fold.change.trans
+color = vector(length = nrow(df.prot.fit))
+for (i in 1:nrow(df.prot.fit)){
+  color[i] = df.dge.fit.sval[df.dge.fit.sval$gene_id==df.prot.fit[i,9],14][[1]]
+}
 
+df.prot.fit$color = color
 
 # Match with Upregulated genes
 df.prot.fit.upreggenes = df.proteomics %>%
@@ -772,41 +711,25 @@ df.prot.fit.downreggenes$transcrip.fc = fold.change.trans
 #Combine both for plotting
 df.prot.fit.updownreggenes <- rbind (df.prot.fit.upreggenes,df.prot.fit.downreggenes )
 
-#Export df.prot.fit
-#write.csv(df.prot.fit,"df_prot_fit.csv")
 
 ```
 
 ```{r}
 df.prot.fit %>%
-  ggplot(aes(x = avg_ratio, y = transcrip.fc, label = paste(gene_id, protein, sep = "-"))) +
+  ggplot(aes(x = avg_ratio, y = transcrip.fc, color=color, label = paste(gene_id, protein, sep = "-"))) +
   geom_point() +
   theme_bw() +
   geom_text_repel() +
-  geom_hline(yintercept = 0) +
-  geom_hline(yintercept = 1, size=0.4, color="green") +
-  geom_hline(yintercept = -1, size=0.4, color="red") +
-  geom_vline(xintercept = 0) +
-  geom_vline(xintercept = 1, size=0.4, color="green") +
-  geom_vline(xintercept = -1, size=0.4, color="red") +
-  labs(x = "Protein effect size: log2(fold-change)", 
-       y = "Transcript effect size: log2(fold-change)",
-       title = "Log2 ratios correlation between Transcriptomics and Proteomics")
-
-
-#PLot expressed proteins to significatnt genes
-df.prot.fit.updownreggenes %>%
-  ggplot(aes(x = avg_ratio, y = transcrip.fc, label = paste(gene_id, protein, sep = "-"))) +
-  geom_point() +
-  theme_bw() +
-  geom_text_repel() +
+  annotate("rect", xmin=1, xmax=Inf, ymin=1, ymax=Inf, alpha=0.2, fill="green") +
+  annotate("rect", xmin=1, xmax=Inf, ymin=-1, ymax=-Inf, alpha=0.2, fill="red") +
+  annotate("rect", xmin=-1, xmax=-Inf, ymin=1, ymax=Inf, alpha=0.2, fill="green") +
+  annotate("rect", xmin=-1, xmax=-Inf, ymin=-1, ymax=-Inf, alpha=0.2, fill="red") +
   geom_hline(yintercept = 0) +
   geom_vline(xintercept = 0) +
-  labs(x = "Protein effect size: log2(fold-change)", 
-       y = "Transcript effect size: log2(fold-change)",
-       title = "Log2 ratios correlation between Transcriptomics and Proteomics")
-
-
+  scale_fill_discrete(labels=c('Upregulated genes', 'Downregulated genes')) +
+  labs(x = "Proteins L2FC", 
+       y = "Genes L2FC",
+       title = "Correlation between Transcriptomics and Proteomics")
 
 
 ```
@@ -826,15 +749,15 @@ df.genelist.prot.names = df.prot.fit.gsea$gene_id
 df.genelist.prot.KEGG = df.prot.fit.gsea$avg_ratio
 names(df.genelist.prot.KEGG) = df.genelist.prot.names
          
-gseKEGG <- gseKEGG(geneList = df.genelist.prot.KEGG,
+gseKEGG_prot <- gseKEGG(geneList = df.genelist.prot.KEGG,
                organism     = "syn",
-               nPerm        = 1000,
+               #nPerm        = 1000,
                minGSSize    = 3,
                maxGSSize    = 800,
                pvalueCutoff = 0.1,
-               pAdjustMethod = "BH",
+               pAdjustMethod = "none",
                keyType       = "kegg")
-dotplot(gseKEGG, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
+dotplot(gseKEGG_prot, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
 
 
 
