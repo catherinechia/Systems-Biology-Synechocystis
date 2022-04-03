@@ -1,9 +1,8 @@
 ---
-title: "Microbial Physiology 1. Turbidostat results."
-date: "`r strftime(Sys.Date(), '%B %d %Y')`"
-output: 
-  pdf_document: 
-    latex_engine: xelatex
+title: "Microbial Physiology I1"
+author: "Leonardo Claudin and Catherine Chia"
+date: "18/2/2022"
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -31,7 +30,9 @@ Load all datasets into different data.frames with the following code:
 
 ```{r load_data}
 df.turbidostat <- read_output_csv("turbidostat", .output.dir = data.dir)
+
 df.design <- read_output_csv("design", .output.dir = data.dir)
+
 df.od <- read_output_csv("spectrophotometer", .output.dir = data.dir)
 ```
 
@@ -40,46 +41,79 @@ od.design = left_join(df.design, df.od, by = "channel")
 ```
 
 ## Estimating pigment composition.
-
 ```{r}
 chl.a.comp = data.frame(channel = od.design$channel,
                       conc = 10.186*(od.design$od_value_685-od.design$od_value_730)-0.08,
                       purpose = od.design$purpose)
 chl.a.m = data.frame(mean = tapply(chl.a.comp$conc, chl.a.comp$purpose, mean),
+                     median = tapply(chl.a.comp$conc, chl.a.comp$purpose, median),
+                     IQR = tapply(chl.a.comp$conc, chl.a.comp$purpose, IQR),
                      sd = tapply(chl.a.comp$conc, chl.a.comp$purpose, sd))
 
 PBS.comp = data.frame(channel = od.design$channel,
                       conc = (od.design$od_value_634-od.design$od_value_730)/od.design$od_value_730,
                       purpose = od.design$purpose)
+
 PBS.m = data.frame(mean = tapply(PBS.comp$conc, PBS.comp$purpose, mean),
+                   median = tapply(PBS.comp$conc, PBS.comp$purpose, median),
+                   IQR = tapply(PBS.comp$conc, PBS.comp$purpose, IQR),
                      sd = tapply(PBS.comp$conc, PBS.comp$purpose, sd))
+
 ```
 
+
+## Statistical test for Chl a and PBS
+
+```{r}
+# Split lists according to conditions
+ls_chla_treatment <- ifelse(chl.a.comp$purpose=="treatment",chl.a.comp$conc,999)
+ls_chla_control <- ifelse(chl.a.comp$purpose=="control",chl.a.comp$conc,999)
+ls_pbs_treatment <- ifelse(PBS.comp$purpose=="treatment",PBS.comp$conc,999)
+ls_pbs_control <- ifelse(PBS.comp$purpose=="control",PBS.comp$conc,999)
+
+# Remove the nonconformities
+ls_chla_treatment[ ls_chla_treatment != 999]
+ls_chla_control[ ls_chla_control != 999]
+ls_pbs_treatment[ ls_pbs_treatment != 999]
+ls_pbs_control[ ls_pbs_control != 999]
+
+#Normality test. p<0.05
+shapiro.test(ls_chla_treatment) #p-value = 0.004042, non-normally distributed
+shapiro.test(ls_chla_control) #p-value = 0.004043, non-normally distributed
+shapiro.test(ls_pbs_treatment) #p-value = 0.004043, non-normally distributed
+shapiro.test(ls_pbs_control) #p-value = 0.004043, non-normally distributed
+
+#Wilcoxon
+# the p-value is less than α =.05, there is sufficient evidence to reject the null hypothesis, meaning treatment and control are different
+# one-tailed test, because we wanna test if less phosphate leads to less ploidy
+wilcox.test(ls_chla_treatment, ls_chla_control, alternative = "less") #p-value = 0.2471
+wilcox.test(ls_pbs_treatment, ls_pbs_control, alternative = "less") #p-value = 0.3662
+
+```
+
+## Plot pigments
 ```{r}
 pig.plot = rbind(chl.a.m, PBS.m)
 rownames(pig.plot) = NULL
 pig.plot$pig = c(rep("chl.A", 2), rep("PBS",2))
 pig.plot$purpose = c("Control", "Treatment", "Control", "Treatment")
-```
 
-```{r}
 ggplot(data=pig.plot, aes(x=as.factor(pig), y=mean, fill=purpose)) +
   geom_bar(stat="identity", position=position_dodge()) +
   scale_fill_manual("legend", values = c("Control" = "#00BBDB", "Treatment" = "#F066EA")) +
-  labs(y = "Chl.A + PBS (mg pigment/L)", x = "[Phosphate] (mM)") +
-  guides(fill=guide_legend(title="Purpose")) +
-  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+  labs(y = "Chl.A + PBS (mg pigment/L)", x = "Chlorophyll A and PBS") +
+  guides(fill=guide_legend(title="Group")) +
+  ggtitle("Concentration of Chlorophyll a and Phycobilisome in both conditions")+ 
+  geom_errorbar(aes(ymin=median-IQR, ymax=median+IQR), width=.2,
                  position=position_dodge(.9)) +
   theme_classic()
 ```
 
-## Turbidostat Data.
 
+## Turbidostat Data. 
 ```{r}
 df.turb_f = left_join(df.turbidostat, df.design, by = "channel")
-```
 
-```{r}
 ggplot(df.turb_f, aes(x = time_h, y = OD, color = purpose)) +
   geom_point() +
   facet_wrap(~ channel + purpose) +
@@ -91,10 +125,9 @@ ggplot(df.turb_f, aes(x = time_h, y = OD, color = purpose)) +
 ```
 
 ## Turbidostat results if we zoom in.
-
 ```{r}
-df.turb.zoom = df.turb_f %>% filter(df.turb_f$time_h > 150,
-                                    df.turb_f$time_h < 180)
+df.turb.zoom = df.turb_f %>% filter(df.turb_f$time_h > 280,
+                                    df.turb_f$time_h < 320)
 ggplot(df.turb.zoom, aes(x = time_h, y = OD, color = pump)) +
   geom_point() +
   facet_wrap(~ channel + purpose) +
@@ -106,35 +139,7 @@ ggplot(df.turb.zoom, aes(x = time_h, y = OD, color = pump)) +
   theme(legend.position="bottom")
 ```
 
-### Sanity check: Calibration method of OD measurements. 
-
-```{r}
-ggplot(df.turb_f, aes(x = od_raw, y = OD, color = as.factor(purpose))) +
-  geom_point() +
-  facet_wrap(~ channel) + 
-  theme_bw() +
-  labs(y = expression("OD"[720]), x = "OD raw",
-       title = expression("Testing the calibration method for OD"[720])) +
-  scale_color_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
-  theme(legend.position = "none") 
-```
-
-```{r}
-models_cal = dlply(df.turb_f, "channel", function(df){
-  linmodel = lm(OD~od_raw, data = df)
-  R2 = summary(linmodel)$r.squared
-  slope = linmodel$coef[2]
-  c(slope, R2)
-})
-
-lm_cal = as.data.frame(do.call(rbind, models_cal))
-colnames(lm_cal) = c("calibration.f", "R2")
-lm_cal$channel = as.double(rownames(lm_cal))
-lm_cal
-```
-
 ## Determining the growth rates of each cycle.
-
 ```{r}
 models <- dlply(df.turbidostat, c("channel"), function(df){
   dlply(df, "decision", function(df2){
@@ -145,11 +150,10 @@ models <- dlply(df.turbidostat, c("channel"), function(df){
     c(coefs, R2, time)
   })
   })
-```
 
-```{r}
-df.turb.zoom2 = df.turb_f %>% filter(df.turb_f$time_h > 151,
-                                     df.turb_f$time_h < 170)
+df.turb.zoom2 = df.turb_f %>% filter(df.turb_f$channel %in% c(3,8),
+                                    df.turb_f$time_h > 151,
+                                    df.turb_f$time_h < 180)
 
 ggplot(df.turb.zoom2, aes(x = time_h, y = log(OD), color = pump)) +
   geom_point() +
@@ -239,7 +243,6 @@ df.turb_f.dil.f = df.turb_f.dil %>% group_by(channel) %>% mutate(dil_pair = ceil
 df.turb_f.dil.f = df.turb_f.dil.f %>% group_by(channel, dil_pair) %>%
   mutate(Diff = lag(OD)/OD)
 df.turb_f.dil.f = df.turb_f.dil.f %>% filter(! is.na(Diff))
-
 df.turb.lm.dil = df.turb.lm %>% group_by(channel) %>% slice(2:n())
 df.turb.dil.plot = cbind(df.turb.lm.dil,Dilution = df.turb_f.dil.f$Diff)
 ```
@@ -276,9 +279,11 @@ ggplot(rsquared.dil, aes(x = as.factor(channel), y = as.numeric(R2), fill = purp
     theme_bw()
 ```
 
+
 ## Summarizing Growth Rates: last 5 days of cultivation.
 
 ```{r}
+## TODO Verfiy time > 280 with METHODS |Total 400h, get last 120h
 df.turb.lm.5 = df.turb.lm %>% filter(df.turb.lm$R2>=0.9,
                              df.turb.lm$growth.r<0.2,
                              df.turb.lm$time >280)
@@ -297,23 +302,54 @@ ggplot(df.turb.lm.5,aes(x = time, y = growth.r, color = R2)) +
 df.turb.msd.5 = data.frame(df.turb.lm.5 %>% 
                              group_by(channel) %>% 
                              summarise_at(vars(growth.r),
-                                          list(mean,sd)))
-colnames(df.turb.msd.5) = c("channel", "mean", "sd")
+                                          list(median)),
+                           df.turb.lm.5 %>% 
+                             group_by(channel) %>% 
+                             summarise_at(vars(growth.r),
+                                          list(IQR)))
+df.turb.msd.5 = df.turb.msd.5[,-3]
 df.turb.msd.5$channel = as.numeric(df.turb.msd.5$channel)
+colnames(df.turb.msd.5) = c("channel", "median", "IQR")
 df.turb.msd.5 = left_join(df.design, df.turb.msd.5, by = "channel")
 ```
 
 ```{r}
-ggplot(data=df.turb.msd.5, aes(x=as.factor(channel), y=mean, fill=purpose)) +
+ggplot(data=df.turb.msd.5, aes(x=as.factor(channel), y=median, fill=purpose)) +
   geom_bar(stat="identity", position=position_dodge()) +
   scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
   labs(y = expression(paste(mu, "(h"^-1,")")), x = "Channel",
        title = "Summary of technical variation",
-       subtitle = "Bars show mean value per channel and errors indicate 2D") +
+       subtitle = "Bars show median value per channel and error bars indicate IQR") +
   guides(fill=guide_legend(title="Purpose")) +
-  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+  geom_errorbar(aes(ymin=median-IQR, ymax=median+IQR), width=.2,
                  position=position_dodge(.9)) +
   theme_classic()
+```
+
+```{r}
+df.turb.msd.Ph = data.frame(df.turb.msd.5 %>% 
+                             group_by(phosphate_mM) %>% 
+                             summarise_at(vars(median),
+                                          list(median)),
+                           df.turb.msd.5 %>% 
+                             group_by(phosphate_mM) %>% 
+                             summarise_at(vars(median),
+                                          list(IQR)))
+df.turb.msd.Ph = df.turb.msd.Ph[,-3]
+colnames(df.turb.msd.Ph) = c("Phosphate_mM", "median", "IQR")
+df.turb.msd.Ph$Phosphate_mM = as.character(df.turb.msd.Ph$Phosphate_mM)
+```
+
+```{r}
+ggplot(data=df.turb.msd.Ph, aes(x=as.factor(Phosphate_mM), y=median, fill = Phosphate_mM)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(y = expression(paste(mu, "(h"^-1,")")), x = "[Phosphate] (mM)",
+       title = "Median growth rate per condition") +
+  scale_fill_manual("legend", values = c("0.23" = "#00BBDB", "0.0115" = "#F066EA")) +
+  geom_errorbar(aes(ymin=median-IQR, ymax=median+IQR), width=.2,
+                 position=position_dodge(.9)) +
+  theme_classic() +
+  theme(legend.position="null")
 ```
 
 ```{r}
@@ -323,7 +359,7 @@ ggplot(df.turb.lm.5, aes(x = channel, y = growth.r, fill = purpose)) +
   labs(y = expression(paste("growth rate (h"^-1, ")")),
        x = "Channel",
        title = "Violin plot",
-       subtitle = "Growth rates distribution per channel for last 5 days") +
+       subtitle = "Growth rates distribution per channel") +
   geom_point(alpha = 0.3, color = "darkblue") +
   geom_boxplot(width=0.1, alpha = 0.6, fill = "white") +
   theme_classic() +
@@ -333,40 +369,10 @@ ggplot(df.turb.lm.5, aes(x = channel, y = growth.r, fill = purpose)) +
   scale_y_continuous(breaks = round(seq(min(df.turb.lm.5$growth.r), max(df.turb.lm.5$growth.r), by = 0.005),3))
 ```
 
-```{r}
-tests = dlply(df.turb.lm.5, "channel", function(df){
-  norm.test = shapiro.test(df$growth.r)
-  c(norm.test$statistic,norm.test$p.value)
-})
-shapiro.res = as.data.frame(do.call(rbind, tests))
-colnames(shapiro.res) = c("statistic", "p.value")
-shapiro.res
-```
 
-```{r}
-df.turb.msd.Ph = data.frame(df.turb.msd.5 %>% 
-                             group_by(phosphate_mM) %>% 
-                             summarise_at(vars(mean),
-                                          list(mean, sd)))
-colnames(df.turb.msd.Ph) = c("Phosphate_mM", "mean", "sd")
-df.turb.msd.Ph$Phosphate_mM = as.character(df.turb.msd.Ph$Phosphate_mM)
-```
-
-```{r}
-ggplot(data=df.turb.msd.Ph, aes(x=as.factor(Phosphate_mM), y=mean, fill = Phosphate_mM)) +
-  geom_bar(stat="identity", position=position_dodge()) +
-  labs(y = expression(paste(mu, "(h"^-1,")")), x = "[Phosphate] (mM)",
-       title = "Summary of biological variation",
-       subtitle = "Bars show mean value per channel and errors indicate 95% CI") +
-  scale_fill_manual("legend", values = c("0.23" = "#00BBDB", "0.0115" = "#F066EA")) +
-  geom_errorbar(aes(ymin=mean-qnorm(0.95)*sd/sqrt(3), ymax=mean+qnorm(0.95)*sd/sqrt(3)), width=.2,
-                 position=position_dodge(.9)) +
-  theme_classic() +
-  theme(legend.position="null")
-```
 
 ### Sanity Check: Normality per condition.
 
 ```{r}
-wilcox.test(df.turb.msd.5$mean ~ df.turb.msd.5$purpose)
+wilcox.test(df.turb.msd.5$median ~ df.turb.msd.5$purpose)
 ```

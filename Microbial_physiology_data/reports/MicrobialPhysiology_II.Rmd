@@ -1,6 +1,6 @@
 ---
 title: "Microbial Physiology II"
-author: "Leonardo Claudin"
+author: "Leonardo Claudin and Catherine Chia"
 date: "18/2/2022"
 output: pdf_document
 ---
@@ -23,8 +23,10 @@ Load the settings and the script with the loading functions:
 ```{r load_settings}
 # Load project settings
 source(here::here("settings.R"))
+
 # Load helper functions
 source(file.path(functions.dir, "output.R"))
+
 ```
 
 Load all datasets into different data.frames with the following code:
@@ -32,9 +34,7 @@ Load all datasets into different data.frames with the following code:
 ```{r load_data}
 df.qpcr <- read_output_csv("qpcr", .output.dir = data.dir)
 df.casy <- read_output_csv("casy", .output.dir = data.dir)
-#df.turbidostat <- read_output_csv("turbidostat", .output.dir = data.dir)
 df.design <- read_output_csv("design", .output.dir = data.dir)
-#df.od <- read_output_csv("spectrophotometer", .output.dir = data.dir)
 ```
 
 #qPCR Results.
@@ -89,7 +89,7 @@ df.qpcr.st.c$efficiency = (10^(-1/df.qpcr.st.c$slope))/2*100
 ```{r}
 ggplot(df.qpcr.st.c, aes(x = replicate, y = slope)) +
   geom_point() +
-  labs(x = "Sample", y = "Slope", title = "Red line indicates optimal slope") +
+  labs(x = "Sample", y = "Slope", title = "Red lines indicate optimal slope") +
   geom_hline(yintercept = -1/log10(2), color = "red") +
   theme_bw()
 ```
@@ -106,7 +106,7 @@ ggplot(df.qpcr.st.c, aes(x = replicate, y = efficiency)) +
 ```{r}
 ggplot(df.qpcr.st.c, aes(x = replicate, y = R2)) +
   geom_point() +
-  labs(x = "Sample", y = expression("R"^2), title = "Red line indicates minimum R2") +
+  labs(x = "Sample", y = expression("R"^2), title = "Red line indicate minimum R2") +
   geom_hline(yintercept = 0.98, color = "red") +
   theme_bw()
 ```
@@ -159,6 +159,8 @@ ggplot(df.casy.mc.m, aes(x = as.factor(channel), y = mean/(10^6), fill = purpose
     guides(fill=guide_legend(title="Purpose")) +
   theme_bw()
 ```
+###Calculate broken cells per channel
+# Find the mean per channel per BBB or ABB (removing technical error)
 
 ```{r}
 df.casy.abb = df.casy %>% filter(df.casy$sample_type == "ABB")
@@ -166,9 +168,9 @@ df.casy.bbb = df.casy %>% filter(df.casy$sample_type == "BBB")
 
 df.casy.abb$counts = df.casy.abb$counts*(10010*2*10^3)/(200*10)
 df.casy.bbb$counts = df.casy.bbb$counts*(10010*50*10^3)/(200*10)
-```
 
-```{r}
+# Find the mean per channel per BBB or ABB (removing technical error)
+# Joining ABB and BBB tables
 df.casy.abb.m = data.frame(df.casy.abb %>% 
                             group_by(channel) %>%
                             summarise_at(vars(counts),
@@ -184,10 +186,9 @@ colnames(df.casy.bbb.m) = c("channel", "mean", "sd")
 df.casy.bbb.m$sample_type = "BBB"
 df.casy.bb.m = rbind(df.casy.abb.m, df.casy.bbb.m)
 df.casy.bb.m = left_join(df.design, df.casy.bb.m, by = "channel")
-```
 
 
-```{r}
+#Plot BBB and ABB Cell Counts per channel
 ggplot(df.casy.bb.m, aes(x = as.factor(channel), y = mean/(10^6), fill = sample_type)) +
   geom_bar(stat="identity", position=position_dodge()) +
   geom_errorbar(aes(ymin=(mean-sd)/(10^6), ymax=(mean+sd)/(10^6)), width=.2,
@@ -197,71 +198,104 @@ ggplot(df.casy.bb.m, aes(x = as.factor(channel), y = mean/(10^6), fill = sample_
        title = "Cell counts in BBB and ABB samples") +
     guides(fill=guide_legend(title="Sample type")) +
   theme_bw()
+
 ```
 
-### CASY-counter: cell extracts.
+### Calculate broken cells per channel
 
 ```{r}
 df.casy.bbb.c = df.casy.bb.m %>% filter(df.casy.bb.m$sample_type == "BBB")
 df.casy.abb.c = df.casy.bb.m %>% filter(df.casy.bb.m$sample_type == "ABB")
 df.casy.bbb.c$broken_cells = df.casy.bbb.c$mean - df.casy.abb.c$mean
 df.casy.bbb.c$lysis_eff = df.casy.bbb.c$broken_cells/df.casy.bbb.c$mean
-```
 
-```{r}
+# Plot Broken cells in each channel
 ggplot(df.casy.bbb.c, aes(x = as.factor(channel), y = broken_cells, fill = purpose)) +
   geom_bar(stat="identity", position=position_dodge()) +
   scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
   labs(x = "Channel", y = "Million broken cells / mL",
-       title = "Number of broken cells/ml (BBB - ABB ratio)") +
+       title = "Broken cells in each channel") +
     guides(fill=guide_legend(title="Sample type")) +
   theme_bw()
 ```
+
+# Lysis Efficiency
 
 ```{r}
 ggplot(df.casy.bbb.c, aes(x = as.factor(channel), y = lysis_eff, fill = purpose)) +
   geom_bar(stat="identity", position=position_dodge()) +
   scale_fill_manual("legend", values = c("control" = "#00BBDB", "treatment" = "#F066EA")) +
   labs(x = "Channel", y = "Lysis efficiency (%)",
-       title = "Lysis efficiency measured with Casy Counter") +
-    guides(fill=guide_legend(title="Sample type")) +
+       title = "Lysis efficiency per channel") +
+    guides(fill=guide_legend(title="Sample types")) +
   scale_y_continuous(labels = scales::percent) +
   theme_bw()
 ```
 
-# Ploidy Determination.
-
+### Ploidy Determination.
+# Calculate [DNA]/broken_cell for each
 ```{r}
 df.qpcr.smpl.c = data.frame(df.qpcr.smpl %>% 
                             group_by(channel) %>%
                             summarise_at(vars(nDNA_fragments),
-                                         list(mean, sd)))
-colnames(df.qpcr.smpl.c) = c("channel", "mean", "sd")
-df.qpcr.smpl.c$chr_cell = df.qpcr.smpl.c$mean*10^3/df.casy.bbb.c$broken_cells
-```
+                                         list(median, IQR)))
+colnames(df.qpcr.smpl.c) = c("channel", "median", "IQR")
+df.qpcr.smpl.c$chr_cell = df.qpcr.smpl.c$median*10^3/df.casy.bbb.c$broken_cells
 
-```{r}
+
+# Join tables
 df.qpcr.smpl.c = left_join(df.qpcr.smpl.c, df.design, by = "channel")
 df.chr.cell = data.frame(df.qpcr.smpl.c %>%
                            group_by(purpose) %>%
                            summarise_at(vars(chr_cell),
-                                        list(mean, sd)))
-colnames(df.chr.cell) = c("purpose", "mean", "sd")
+                                        list(median, IQR)))
+colnames(df.chr.cell) = c("purpose", "median", "IQR")
 df.chr.cell$Phosphate_mM = c(0.23, 0.0115)
 ```
 
+# Normality test using Shapiro test for small sample size (min 3, max 5000) https://stats.stackexchange.com/questions/1645/appropriate-normality-tests-for-small-samples
+# if the p-value is less than α =.05, there is sufficient evidence to say that the sample does not come from a population that is normally distributed.
 ```{r}
-ggplot(data=df.chr.cell, aes(x=as.factor(Phosphate_mM), y= mean, fill = as.factor(Phosphate_mM))) +
+# Split lists according to conditions, assign the nonconformities to 999
+ls_dna_density_treatment <- ifelse(df.qpcr.smpl.c$purpose == "treatment",df.qpcr.smpl.c$chr_cell, 999)
+
+ls_dna_density_control <- ifelse(df.qpcr.smpl.c$purpose == "control",df.qpcr.smpl.c$chr_cell, 999)
+
+# Remove the nonconformities
+ls_dna_density_treatment[ ls_dna_density_treatment != 999]
+ls_dna_density_control[ ls_dna_density_control != 999]
+
+#Normality test. p<0.05
+shapiro.test(ls_dna_density_treatment) 
+shapiro.test(ls_dna_density_control) 
+```
+
+# Time to find out if the DNA/cell are different for Treatment and Control
+# https://www.statology.org/mann-whitney-u-test-r/
+# the p-value is less than α =.05, there is sufficient evidence to reject the null hypothesis, meaning treatment and control are different
+# one-tailed test, because we wanna test if less phosphate leads to less ploidy
+
+```{r}
+wilcox.test(ls_dna_density_treatment, ls_dna_density_control, alternative = "less")
+
+# p-value = 0.2471. Null hypothesis is not rejected. There's no significant difference between treatment and control. 
+
+```
+
+
+# Plot. Ploidy levels across experimental conditions
+```{r}
+ggplot(data=df.chr.cell, aes(x=as.factor(Phosphate_mM), y= median, fill = as.factor(Phosphate_mM))) +
   geom_bar(stat="identity", position=position_dodge()) +
-  labs(y = expression(paste("chr x cell"^-1)), x = "[Phosphate] (mM)",
-       title = "Ploidy level across experimental conditions",
-       subtitle = "Bars show mean value per condition and errors indicate 95% CI") +
+  labs(y = expression(paste("DNA Concentaration (DNA/cell)")), x = "Phosphate concentration (mM)",
+       title = "Ploidy levels across experimental conditions",
+       subtitle = "Bars show median value per condition and error bars indicate IQR") +
   scale_fill_manual("legend", values = c("0.23" = "#00BBDB", "0.0115" = "#F066EA")) +
-  geom_errorbar(aes(ymin=mean-qnorm(0.95)*sd/sqrt(3), ymax=mean+qnorm(0.95)*sd/sqrt(3)), width=.2,
+  guides(fill=guide_legend(title="Sample types")) +
+  geom_errorbar(aes(ymin=median-IQR, ymax=median+IQR), width=.2,
                  position=position_dodge(.9)) +
   scale_y_continuous(breaks = c(0,5,10)) +
-  theme_classic() +
-  theme(legend.position="null")
+  theme_classic()
 ```
 
 
